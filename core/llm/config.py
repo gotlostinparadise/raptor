@@ -213,7 +213,10 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
                                 )
                                 api_base = f"{ollama_base.rstrip('/')}/v1"
                             else:
-                                api_base = PROVIDER_ENDPOINTS.get(entry_provider)
+                                # Explicit per-entry ``api_base`` wins over the
+                                # provider endpoint table so custom gateways
+                                # (OmniRoute / corporate proxy) route correctly.
+                                api_base = model_entry.get("api_base") or PROVIDER_ENDPOINTS.get(entry_provider)
 
                             # Optional overrides from config
                             timeout = model_entry.get('timeout', 120)
@@ -658,7 +661,11 @@ def _model_config_from_entry(entry: Dict) -> 'ModelConfig':
         ollama_base = _validate_ollama_url(RaptorConfig.OLLAMA_HOST)
         api_base = f"{ollama_base.rstrip('/')}/v1"
     else:
-        api_base = PROVIDER_ENDPOINTS.get(provider)
+        # Honour an explicit per-entry ``api_base`` (custom OpenAI-compatible
+        # gateway / corporate proxy / self-hosted router) before falling back
+        # to the built-in provider endpoint table. Mirrors ``client.py``'s
+        # ``config_for_model`` path, which already reads ``entry["api_base"]``.
+        api_base = entry.get("api_base") or PROVIDER_ENDPOINTS.get(provider)
     # Bedrock-only: per-model API surface override.  Falls back to
     # ``RAPTOR_BEDROCK_API`` env (mantle default).  Unrecognised values
     # snap to mantle, same defensive shape as ``_build_bedrock_config``.
