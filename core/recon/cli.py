@@ -53,6 +53,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--url-history", action="store_true",
                    help="with --web, mine archive.org for historical endpoints "
                         "(passive third-party lookup)")
+    p.add_argument("--browser", action="store_true",
+                   help="with --web, DOM-aware crawl of discovered origins "
+                        "(active; needs Playwright+Chromium)")
+    p.add_argument("--authz-config", default=None,
+                   help="with --web --browser, a /webauthz identity config so the "
+                        "crawl runs authenticated (reaches the logged-in surface)")
     p.add_argument("--max-rounds", type=int, default=3,
                    help="max discovery-loop rounds (default 3)")
     p.add_argument("--rebuild", action="store_true",
@@ -186,6 +192,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             args.out_dir, roots, profile=profile,
             authorization=args.authorization,
             include_url_history=args.url_history,
+            browser=args.browser,
+            authz_config=args.authz_config,
         )
 
     if args.stdout:

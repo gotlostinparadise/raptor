@@ -106,6 +106,21 @@ auto-registered: it has no availability gate, so it would otherwise run — and
 contact a third party — in every web run; the bridge/CLI instantiate it
 explicitly only when asked.
 
+### Authenticated crawl
+
+`--web --browser` runs the DOM-aware `BrowserCrawlSource` over the discovered
+origins. Add `--authz-config <file>` (a `/webauthz` identity config) and the
+bridge builds a logged-in `core/session/engine.py:SessionEngine` (via
+`core/webauthz/runner.py:build_engine`) and passes it as `run_webgraph`'s
+`session=` — the crawl then reaches the authenticated surface where BOLA/BFLA
+live. `core/browser/auth.py` is the seam: `resolve_identity` picks the identity
+(named, or the first authenticated one) and `context_args_for_identity` converts
+its auth headers + cookie jar into Playwright context args
+(`new_session(extra_http_headers=…, cookies=…)`); an `IdentityRecord` is stamped
+so the graph records which identity the crawl ran as. Both conversion helpers are
+pure (no Playwright) and unit-tested; the crawl wiring is covered via a fake
+harness. No config / no engine ⇒ an anonymous crawl, unchanged.
+
 ### Persisted scope
 
 `/recon` with no roots falls back to the active project's `recon_scope`

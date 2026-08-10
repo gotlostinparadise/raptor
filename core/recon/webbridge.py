@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, List, Optional, Sequence, Union
+from urllib.parse import urlsplit
 
 # Recon → webgraph safety-profile name mapping. Recon profiles gate traffic to
 # *infrastructure*; webgraph profiles gate traffic to the *application*. Passive
@@ -61,6 +62,8 @@ def build_web_graph(
     oast: Optional[Any] = None,
     extra_origins: Sequence[str] = (),
     include_url_history: bool = False,
+    browser: bool = False,
+    authz_config: Optional[str] = None,
 ) -> Any:
     """Build the app-layer graph from a completed recon run's origins.
 
@@ -87,12 +90,24 @@ def build_web_graph(
 
     web_profile = _PROFILE_MAP.get(profile, "safe")
 
-    # Default source set (``None``) lets the registered spec/browser sources
-    # gate themselves off; url_history is explicit opt-in (never auto-registered).
-    sources = None
+    # Build a SessionEngine from a /webauthz identity config so the browser crawl
+    # runs authenticated (reaching the BOLA/BFLA surface). Only when a config is
+    # given and the caller didn't already supply an engine.
+    if authz_config and session is None:
+        session = _build_session(authz_config, origins)
+
+    # Source selection. ``None`` lets the registered spec/browser sources gate
+    # themselves off; but browser crawl and url_history are explicit opt-ins here
+    # (url_history is never auto-registered; browser we want deterministically on
+    # when asked, seeded with the resolved identity via ctx.session).
+    src_list: List[Any] = []
+    if browser:
+        from core.browser.crawl_source import BrowserCrawlSource
+        src_list.append(BrowserCrawlSource())
     if include_url_history:
         from core.webgraph.url_history import UrlHistorySource
-        sources = [UrlHistorySource()]
+        src_list.append(UrlHistorySource())
+    sources = src_list or None
 
     return run_webgraph(
         origins,
@@ -102,6 +117,29 @@ def build_web_graph(
         session=session,
         oast=oast,
     )
+
+
+def _build_session(authz_config: str, origins: Sequence[str]) -> Optional[Any]:
+    """A logged-in :class:`SessionEngine` from a /webauthz config, or ``None``.
+
+    Guarded end to end: a missing file, a parse error, or an absent webauthz
+    stack degrades to an anonymous crawl rather than aborting the web build.
+    """
+    try:
+        import os
+        from core.http import default_client
+        from core.webauthz.config import load_config
+        from core.webauthz.runner import build_engine
+    except Exception:
+        return None
+    try:
+        cfg = load_config(Path(authz_config))
+        hosts = [h for h in (urlsplit(o).hostname for o in origins) if h]
+        client = default_client(hosts or None)
+        engine, _warnings = build_engine(cfg, client, env=dict(os.environ))
+        return engine
+    except Exception:
+        return None
 
 
 __all__ = ["build_web_graph"]
