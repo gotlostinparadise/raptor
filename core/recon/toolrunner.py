@@ -167,6 +167,10 @@ def run_net_tool(
                 text=True,
                 timeout=timeout,
                 env=_child_env(env),
+                # ``env`` is already the orchestrator's get_safe_env(); tell the
+                # sandbox to (idempotently) strip DANGEROUS_ENV_VARS from it too,
+                # which also silences the "get_safe_env not applied" warning.
+                strict_env=True,
                 stdin=subprocess.DEVNULL,
                 start_new_session=True,
             )
