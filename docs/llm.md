@@ -242,6 +242,90 @@ If a provider is consistently throttled, RAPTOR logs the effective rate
 at run end.
 
 
+## Sensitive-Target Egress Gate
+
+RAPTOR can pin an engagement's source code to first-party destinations so it
+never reaches a third-party LLM gateway (e.g. an OpenAI-compatible proxy
+configured via `api_base`).
+
+**Trust model.** A run's target is classified `sensitive` or `external_ok`.
+On a **sensitive** run, only first-party destinations are allowed — Anthropic
+(`api.anthropic.com`), Claude Code, AWS Bedrock (your own account), and local
+Ollama. Every other destination (any non-Anthropic host reached through a
+generic OpenAI-compatible provider) is **refused**.
+
+**Fail-closed.** An unclassified target is treated as `sensitive` until you say
+otherwise — external LLMs are blocked and a one-time prompt asks you to
+classify. The answer persists in `~/.config/raptor/sensitivity.json`.
+
+**Enforcement.** The gate lives in `create_provider()` (`core/llm/providers.py`)
+— the single chokepoint every caller passes through (in-process SDK, the
+credential-isolation dispatcher worker, and cve-diff's `ResilientLLMClient`).
+Blocking construction there means no bytes leave regardless of transport. The
+egress proxy allowlist (`core/llm/egress.py`) additionally drops guarded hosts
+for sensitive runs. Blocked attempts raise `OmniEgressBlocked` and append a
+record to `omni-egress.jsonl` in the run directory.
+
+**Operator CLI** (`libexec/raptor-sensitivity`):
+
+```bash
+raptor-sensitivity get <target>            # sensitive | external_ok | unknown
+raptor-sensitivity set <target> sensitive  # first-party only
+raptor-sensitivity set <target> external   # allow external LLMs
+raptor-sensitivity list
+raptor-sensitivity status <target>
+```
+
+A `.raptor-sensitive` marker file in a target root forces `sensitive`
+regardless of the registry.
+
+**Precedence.** `RAPTOR_SENSITIVE` env var (`sensitive` / `external_ok`) — a
+per-run override — beats the persisted classification, which beats the
+fail-closed default. The gate stays **dormant** (no effect) for library/test
+code that never establishes a target context; real analysis runs engage it
+automatically.
+
+**Coverage.** The commands that make programmatic LLM calls engage the gate at
+run start (`sensitivity.engage_for_run`): `/agentic` and `/analyze` (via
+`AutonomousSecurityAgentV2`) and `/codeql` (autonomous phase). `/validate` runs
+its LLM stages in-session (Claude Code / first-party), so it has no third-party
+egress path. `/scan` and `/web` make no LLM calls at all.
+
+## LLM-Guarded Redaction (external egress)
+
+An optional second layer for the **`external_ok`** path: before a prompt reaches
+a guarded (non first-party) destination, RAPTOR scrubs secrets and operator
+metadata out of it. Off by default — enable with `RAPTOR_REDACT_EXTERNAL=1` or
+`LLMConfig.redact_external = true`.
+
+**Two layers.** A **trusted guard LLM** (cheap/fast `claude-haiku-4-5` via
+first-party Anthropic when `ANTHROPIC_API_KEY` is set, else Claude Code)
+semantically identifies sensitive substrings and returns them as *structured
+spans*; RAPTOR applies the replacements mechanically (the guard can only flag
+substrings, never rewrite code). Beneath it, a deterministic **regex floor**
+catches well-known formats (`sk-…`, `AKIA…`, `gh[pousr]_…`, JWTs, PEM keys,
+`Bearer …`) so a bad guard response can't let a known key slip.
+
+**Hard constraint.** The guard model must be first-party-trusted
+(`sensitivity.model_is_trusted`) — running it on OmniRoute would send the raw
+prompt to the very place we're protecting against. `build_guard_config()`
+refuses a non-trusted guard. The guard's own (trusted) call is never itself
+redacted, which is also what prevents recursion.
+
+**Fail-closed.** When redaction is enabled and the destination is guarded, it
+must succeed or the call is blocked (`RedactionUnavailable`).
+
+**Scope.** Redacts secrets / credentials / PII / internal identifiers /
+operator metadata. Deliberately does **not** redact ordinary source or
+security-relevant constructs (a hardcoded internal IP that is itself the finding
+stays) — scrubbing those would blind the analysis. Replacements use stable
+`[CATEGORY_n]` tokens with a reverse map; category **counts** are logged to
+`omni-redaction.jsonl` (never the values).
+
+**Not a security boundary.** Best-effort hygiene on the already-permitted path.
+The guarantee is the sensitivity gate above; if data must stay private, classify
+the target sensitive.
+
 ## Credential Isolation
 
 The LLM dispatcher (`core/llm/dispatcher/`) holds API keys in the parent process only.
@@ -299,3 +383,6 @@ granularity).
 | `RAPTOR_LLM_SOCKET` | Credential isolation dispatcher socket |
 | `RAPTOR_CONFIG` | Override path to `models.json` |
 | `OLLAMA_HOST` | Ollama server URL |
+| `RAPTOR_SENSITIVE` | Per-run egress-gate override: `sensitive` / `external_ok` |
+| `RAPTOR_SENSITIVITY_REGISTRY` | Override path to `sensitivity.json` |
+| `RAPTOR_REDACT_EXTERNAL` | Enable LLM-guarded prompt redaction before external egress |

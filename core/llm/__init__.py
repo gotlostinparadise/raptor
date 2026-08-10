@@ -32,6 +32,10 @@ from .cc_adapter import (
 from .client import LLMClient
 from .config import LLMConfig, ModelConfig, ConfigError
 from .detection import LLMAvailability, detect_llm_availability
+from . import sensitivity
+from .sensitivity import OmniEgressBlocked
+from . import redaction
+from .redaction import RedactionUnavailable
 
 __all__ = [
     "LLMProvider",
@@ -58,4 +62,8 @@ __all__ = [
     "ConfigError",
     "LLMAvailability",
     "detect_llm_availability",
+    "sensitivity",
+    "OmniEgressBlocked",
+    "redaction",
+    "RedactionUnavailable",
 ]

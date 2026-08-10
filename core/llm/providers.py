@@ -1187,6 +1187,8 @@ class OpenAICompatibleProvider(LLMProvider):
     def generate(self, prompt: str, system_prompt: Optional[str] = None,
                  **kwargs) -> LLMResponse:
         """Generate completion using the OpenAI SDK."""
+        from . import redaction  # LLM-guarded scrub before external egress
+        prompt, system_prompt = redaction.redact_prompt(self.config, prompt, system_prompt)
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -1297,6 +1299,8 @@ class OpenAICompatibleProvider(LLMProvider):
                            system_prompt: Optional[str] = None,
                            **kwargs) -> Tuple[Dict[str, Any], str]:
         """Generate structured output using Instructor (or JSON fallback)."""
+        from . import redaction  # LLM-guarded scrub before external egress
+        prompt, system_prompt = redaction.redact_prompt(self.config, prompt, system_prompt)
         pydantic_model = _dict_schema_to_pydantic(schema)
         # Honour caller-supplied temperature so DispatchTask's
         # `temperature = 0.2` (analysis), `0.3` (consensus), etc.
@@ -1429,6 +1433,10 @@ class OpenAICompatibleProvider(LLMProvider):
                 f"OpenAICompatibleProvider.turn: ignoring unrecognised "
                 f"kwargs: {sorted(_unused)}"
             )
+
+        # LLM-guarded scrub of message text before external egress.
+        from . import redaction
+        messages, system = redaction.redact_messages(self.config, messages, system)
 
         # Already detected this provider rejects tool/function calling.
         # Synthesise via the ABC's JSON-protocol fallback rather than
@@ -1629,6 +1637,10 @@ class OpenAICompatibleProvider(LLMProvider):
                 "OpenAICompatibleProvider.turn_stream: ignoring "
                 "unrecognised kwargs: %s", sorted(_unused),
             )
+
+        # LLM-guarded scrub of message text before external egress.
+        from . import redaction
+        messages, system = redaction.redact_messages(self.config, messages, system)
 
         if self._tool_use_unsupported and tools:
             yield from LLMProvider.turn_stream(
@@ -3858,7 +3870,21 @@ def create_provider(config: ModelConfig) -> LLMProvider:
 
     Returns:
         LLMProvider instance
+
+    Raises:
+        OmniEgressBlocked: when the active run's target is classified
+            SENSITIVE and ``config`` points at a guarded (non
+            first-party) destination. This is the single transport-
+            agnostic chokepoint for the sensitivity gate — every caller
+            (in-process SDK, dispatcher worker, cve-diff) passes here,
+            so blocking construction here means no bytes ever leave.
     """
+    # Sensitivity gate (Feature 1). Dormant unless a run engaged it via
+    # sensitivity.set_current_target() or RAPTOR_SENSITIVE; then a
+    # sensitive target refuses every non-first-party destination.
+    from .sensitivity import guard_model
+    guard_model(config)
+
     provider = config.provider.lower()
     if provider in (
         "claudecode-resumable",

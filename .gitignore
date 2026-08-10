@@ -37,3 +37,6 @@ tuning.json
 .sage/
 *.sage.key
 *.gcov
+
+# OmniRoute gateway config — holds a live API key. Track .omni.sample instead.
+.omni

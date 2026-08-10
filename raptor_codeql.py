@@ -113,6 +113,15 @@ def run_autonomous_workflow(args):
         codeql_cli=args.codeql_cli
     )
 
+    # Engage the sensitivity gate for this run's target before the
+    # autonomous (LLM-powered) phase constructs any provider. UNKNOWN
+    # targets resolve to SENSITIVE (fail-closed) — external LLMs
+    # (OmniRoute etc.) are refused until classified. See
+    # core.llm.sensitivity; enforcement is in create_provider.
+    from core.llm import sensitivity
+    sensitivity.engage_for_run(
+        Path(args.repo), getattr(agent, "out_dir", None), logger_=logger)
+
     scan_result = agent.run_autonomous_analysis(
         languages=languages,
         build_commands=build_commands,
