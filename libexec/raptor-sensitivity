@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Per-target sensitivity classification — the operator control for the
+external-LLM egress gate (Feature 1).
+
+A target classified SENSITIVE routes only to first-party destinations
+(Anthropic / Claude Code / Bedrock / local Ollama); OmniRoute and other
+third-party gateways are refused. An UNCLASSIFIED target is treated as
+SENSITIVE (fail-closed) until you say otherwise.
+
+Usage:
+  raptor-sensitivity get <target>              # sensitive | external_ok | unknown
+  raptor-sensitivity set <target> sensitive    # mark sensitive (first-party only)
+  raptor-sensitivity set <target> external     # allow external LLMs (OmniRoute)
+  raptor-sensitivity list                       # dump the registry
+  raptor-sensitivity status [<target>]          # resolved state for a run
+
+Registry: ~/.config/raptor/sensitivity.json (override RAPTOR_SENSITIVITY_REGISTRY).
+A `.raptor-sensitive` marker file in a target root forces SENSITIVE.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.llm import sensitivity as S  # noqa: E402
+
+
+def _label(verdict):
+    if verdict is None:
+        return "unknown"
+    return S.SENSITIVE if verdict else S.EXTERNAL_OK
+
+
+def main() -> int:
+    argv = sys.argv[1:]
+    if not argv:
+        sys.stderr.write(__doc__.strip() + "\n")
+        return 1
+    action = argv[0]
+
+    if action == "get":
+        if len(argv) != 2:
+            sys.stderr.write("usage: raptor-sensitivity get <target>\n")
+            return 1
+        print(_label(S.get_classification(argv[1])))
+        return 0
+
+    if action == "set":
+        if len(argv) != 3 or argv[2] not in ("sensitive", "external", "external_ok"):
+            sys.stderr.write("usage: raptor-sensitivity set <target> <sensitive|external>\n")
+            return 1
+        sensitive = argv[2] == "sensitive"
+        S.set_classification(argv[1], sensitive)
+        print(f"{argv[1]} -> {S.SENSITIVE if sensitive else S.EXTERNAL_OK}")
+        return 0
+
+    if action == "list":
+        entries = S.list_classifications()
+        if not entries:
+            print("(no classifications yet — every target is treated as SENSITIVE)")
+            return 0
+        for key, rec in sorted(entries.items()):
+            state = S.SENSITIVE if rec.get("sensitive") else S.EXTERNAL_OK
+            note = rec.get("note") or ""
+            print(f"{state:12} {key}" + (f"  # {note}" if note else ""))
+        return 0
+
+    if action == "status":
+        target = argv[1] if len(argv) > 1 else None
+        if target is not None:
+            state = S.set_current_target(target)
+            known = S.current_target_is_known()
+            print(f"target: {target}")
+            print(f"state:  {state}" + ("" if known else "  (UNCLASSIFIED -> defaulted SENSITIVE)"))
+        else:
+            print(f"state:  {S.current_state()}  (no target; env RAPTOR_SENSITIVE or dormant)")
+        return 0
+
+    sys.stderr.write(f"unknown action: {action}\n")
+    sys.stderr.write(__doc__.strip() + "\n")
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

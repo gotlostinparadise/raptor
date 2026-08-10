@@ -448,6 +448,14 @@ class LLMClient:
         else:
             self.config = LLMConfig()
         self._pinned_model = pinned_model
+        # Feature 2: propagate the config's redaction toggle to the module
+        # switch (RAPTOR_REDACT_EXTERNAL env still overrides). See
+        # core.llm.redaction.
+        try:
+            from . import redaction
+            redaction.set_enabled(getattr(self.config, "redact_external", False))
+        except Exception:  # noqa: BLE001 — never break client init on this
+            pass
         self.providers: Dict[str, LLMProvider] = {}
         self.total_cost = 0.0
         self.request_count = 0

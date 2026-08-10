@@ -152,6 +152,29 @@ def derive_allowlist(config: "LLMConfig") -> Set[str]:
         host = _hostname_of(url)
         if host:
             hosts.add(host)
+
+    # Sensitivity gate, defense-in-depth (Feature 1). On a SENSITIVE run
+    # drop any guarded (non first-party) host from the proxy allowlist so
+    # the CONNECT tunnel is refused even if the create_provider gate were
+    # somehow bypassed. The authoritative block is in create_provider;
+    # this only tightens the allowlist for mixed trusted+guarded configs.
+    try:
+        from .sensitivity import current_state, model_is_trusted, SENSITIVE
+        if current_state() == SENSITIVE:
+            trusted_hosts = {
+                _hostname_of(
+                    getattr(m, "api_base", None)
+                    or PROVIDER_ENDPOINTS.get(getattr(m, "provider", None))
+                    or _KNOWN_DEFAULTS.get(getattr(m, "provider", None))
+                    or ""
+                )
+                for m in candidates
+                if m is not None and model_is_trusted(m)
+            }
+            hosts = {h for h in hosts if h in trusted_hosts}
+    except Exception as exc:  # noqa: BLE001 — never let the gate break egress setup
+        logger.debug("sensitivity allowlist filter skipped: %s", exc)
+
     return hosts
 
 

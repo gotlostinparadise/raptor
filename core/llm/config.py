@@ -1121,6 +1121,10 @@ class LLMConfig:
     # which a real cache backend would be more appropriate.
     cache_max_entries: Optional[int] = None
     enable_cost_tracking: bool = True
+    # Feature 2: LLM-guarded redaction of prompts before they reach a
+    # non first-party (guarded) destination. Off by default; RAPTOR_REDACT_EXTERNAL
+    # env overrides. See core.llm.redaction.
+    redact_external: bool = False
     max_cost_per_scan: float = 10.0  # USD
     # Model scorecard (core/llm/scorecard) — track per-model
     # reliability across decision classes and use measured miss-rate

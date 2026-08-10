@@ -648,6 +648,13 @@ class AutonomousSecurityAgentV2:
         self.repo_path = repo_path
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
+        # Engage the sensitivity gate for this run's target BEFORE any
+        # provider is constructed below. UNKNOWN targets resolve to
+        # SENSITIVE (fail-closed): external LLMs (OmniRoute etc.) are
+        # refused until the operator classifies the target as external-ok.
+        # See core.llm.sensitivity.
+        from core.llm import sensitivity
+        sensitivity.engage_for_run(self.repo_path, self.out_dir, logger_=logger)
         # KNighter follow-up: synthesise a checker rule for every
         # confirmed exploitable finding and emit suspicious annotations
         # for variants found across the codebase. Default on; opt out
