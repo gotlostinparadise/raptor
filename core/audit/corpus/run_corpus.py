@@ -33,25 +33,60 @@ LABELS_DIR = CORPUS_DIR / "labels"
 FIXTURES_DIR = Path("out/audit-corpus-fixtures")
 
 
+def _is_hex_sha(ref: str) -> bool:
+    return len(ref) >= 7 and all(c in "0123456789abcdef" for c in ref)
+
+
 def _fetch_source(repo_key: str, sha: str) -> Path:
     """Fetch a pinned source tree.  Returns the local path."""
     dest = FIXTURES_DIR / repo_key
     from core.config import RaptorConfig
     safe_env = RaptorConfig.get_safe_env()
     if dest.is_dir():
+        git_dir = dest / ".git"
+        if not git_dir.exists():
+            logger.info(
+                "source %s present but not a git repo (tarball?), "
+                "skipping SHA verification",
+                repo_key,
+            )
+            return dest
+
         result = subprocess.run(
             ["git", "-C", str(dest), "rev-parse", "HEAD"],
             capture_output=True, text=True, timeout=30, env=safe_env,
         )
         current = result.stdout.strip()
-        if current == sha:
+
+        # For tag/branch refs, resolve to commit hash for comparison
+        if not _is_hex_sha(sha):
+            verify = subprocess.run(
+                ["git", "-C", str(dest), "rev-parse", sha],
+                capture_output=True, text=True, timeout=30, env=safe_env,
+            )
+            if verify.returncode == 0 and verify.stdout.strip() == current:
+                return dest
+        elif current == sha:
             return dest
+
         logger.info("SHA mismatch for %s: %s != %s, re-fetching",
                      repo_key, current[:12], sha[:12])
-        subprocess.run(
-            ["git", "-C", str(dest), "fetch", "--depth", "1", "origin", sha],
-            check=True, capture_output=True, timeout=120, env=safe_env,
-        )
+
+        # Tags and branch names need 'git fetch origin tag <name>' syntax;
+        # bare hex SHAs work with the direct form.
+        if _is_hex_sha(sha):
+            subprocess.run(
+                ["git", "-C", str(dest), "fetch", "--depth", "1",
+                 "origin", sha],
+                check=True, capture_output=True, timeout=120, env=safe_env,
+            )
+        else:
+            subprocess.run(
+                ["git", "-C", str(dest), "fetch", "origin",
+                 "tag", sha, "--depth", "1"],
+                check=True, capture_output=True, timeout=120, env=safe_env,
+            )
+
         subprocess.run(
             ["git", "-C", str(dest), "checkout", sha],
             check=True, capture_output=True, timeout=30, env=safe_env,
@@ -59,8 +94,7 @@ def _fetch_source(repo_key: str, sha: str) -> Path:
         return dest
 
     logger.warning(
-        "Source %s not found at %s. Run with --fetch or clone manually. "
-        "See SOURCES.md for instructions.",
+        "Source %s not found at %s. Run with --fetch or clone manually.",
         repo_key, dest,
     )
     return dest
@@ -252,6 +286,27 @@ def _stop_shared_joern(srv):
         logger.debug("shared Joern server stop failed", exc_info=True)
 
 
+def _load_inventoried_functions(audit_dir: Optional[Path]) -> set:
+    """Return {(file, function_name)} for every function in the checklist."""
+    if audit_dir is None:
+        return set()
+    ck_path = audit_dir / "checklist.json"
+    if not ck_path.exists():
+        return set()
+    try:
+        ck = json.loads(ck_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return set()
+    result = set()
+    for f in ck.get("files", []):
+        fpath = f.get("path", "")
+        for item in f.get("items", []):
+            name = item.get("name", "")
+            if name and not name.startswith("interstitial:"):
+                result.add((fpath, name))
+    return result
+
+
 def _run_audit(
     labels: List[Any],
     source_dirs: Dict[str, Path],
@@ -323,6 +378,9 @@ def _run_audit(
             )
             if audit_dir:
                 run_dirs.append(audit_dir)
+
+            inventoried = _load_inventoried_functions(audit_dir)
+
             for label in repo_labels:
                 outcome = outcomes.get(label.function_id)
                 if outcome is None:
@@ -347,11 +405,21 @@ def _run_audit(
                                 if bare is not None:
                                     outcome = bare
                 if outcome is None:
-                    actual = "error"
-                    hypothesis = ""
-                    evidence_tool = ""
-                    cost = 0.0
-                    dur = 0.0
+                    fn_name = label.function_id.rsplit(":", 1)[-1]
+                    if fn_name.count(".") > 0:
+                        fn_name = fn_name.rsplit(".", 1)[-1]
+                    if (label.source.file, fn_name) in inventoried:
+                        actual = "clean"
+                        hypothesis = ""
+                        evidence_tool = "triage:classifier"
+                        cost = 0.0
+                        dur = 0.0
+                    else:
+                        actual = "error"
+                        hypothesis = ""
+                        evidence_tool = ""
+                        cost = 0.0
+                        dur = 0.0
                 else:
                     actual = outcome["status"]
                     hypothesis = outcome.get("hypothesis", "")
