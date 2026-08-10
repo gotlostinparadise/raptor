@@ -68,14 +68,16 @@ def main(argv=None):
 
     stamp = datetime.now(timezone.utc).isoformat()
     inventory["generated_at"] = stamp
-    roles = [r.strip() for r in args.roles.split(",") if r.strip()] or None
-    matrix = build_authz_matrix(inventory, roles=roles)
-    matrix["generated_at"] = stamp
 
     if args.stdout:
         json.dump(inventory, sys.stdout, indent=2)
         sys.stdout.write("\n")
         return 0
+
+    # Only needed when we actually write files (below).
+    roles = [r.strip() for r in args.roles.split(",") if r.strip()] or None
+    matrix = build_authz_matrix(inventory, roles=roles)
+    matrix["generated_at"] = stamp
 
     out_dir = args.out_dir or Path.cwd()
     out_dir.mkdir(parents=True, exist_ok=True)

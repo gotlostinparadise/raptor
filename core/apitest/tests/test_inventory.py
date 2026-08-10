@@ -1,15 +1,12 @@
-"""Tests for core.apitest.inventory — the offline API description parser."""
+"""Tests for core.apitest.inventory — the offline API description parser.
 
-import json
-import os
-import sys
-from pathlib import Path
+Fully offline; the root conftest.py puts the repo root on sys.path and sets
+RAPTOR_DIR, so a bare ``from core.apitest import ...`` resolves at collection.
+"""
 
 import pytest
 
-sys.path.insert(0, os.environ.get("RAPTOR_DIR", str(Path(__file__).resolve().parents[3])))
-
-from core.apitest import (  # noqa: E402
+from core.apitest import (
     build_authz_matrix,
     build_inventory,
     detect_kind,
@@ -226,6 +223,81 @@ def test_empty_paths_ok():
     assert inv["endpoint_count"] == 0
     matrix = build_authz_matrix(inv)
     assert matrix["test_count"] == 0
+
+
+def test_postman_string_url_query_params():
+    """Regression: string-form Postman URLs must yield query params so
+    query-based object ids still get BOLA rows."""
+    doc = {
+        "info": {"name": "S", "schema": "v2.1.0"}, "auth": {"type": "bearer"},
+        "item": [{"name": "get order", "request": {
+            "method": "GET",
+            "url": "https://api.example.com/orders?order_id=5&verbose=1"}}],
+    }
+    inv = build_inventory(doc)
+    ep = inv["endpoints"][0]
+    assert ep["path"] == "/orders"
+    assert ep["query_params"] == ["order_id", "verbose"]
+    assert ep["object_scoped"] is True                     # order_id detected
+    matrix = build_authz_matrix(inv)
+    assert any(t["test_type"] == "BOLA" for t in matrix["tests"])
+
+
+def test_graphql_mutation_gets_property_level_row():
+    """Regression: MUTATION is a mutating method, so mutations with args
+    get an API3 property-level row."""
+    doc = {"data": {"__schema": {
+        "queryType": {"name": "Q"}, "mutationType": {"name": "M"},
+        "types": [
+            {"name": "Q", "fields": []},
+            {"name": "M", "fields": [
+                {"name": "updateProfile", "args": [{"name": "bio"}, {"name": "role"}]}]},
+        ]}}}
+    inv = build_inventory(doc)
+    mut = inv["endpoints"][0]
+    assert mut["method"] == "MUTATION"
+    assert "API3" in mut["owasp_focus"]
+    matrix = build_authz_matrix(inv)
+    assert any("property" in t["test_type"] for t in matrix["tests"])
+
+
+def test_yaml_non_string_path_and_method_keys_dont_crash():
+    """Regression: YAML bool/int keys (on:, 123:) must be skipped, not crash."""
+    doc = {"openapi": "3.0.0", "paths": {
+        "/ok": {"get": {"operationId": "ok"}},
+        True: {"get": {"operationId": "boolPath"}},      # ``on:`` -> True
+        "/x": {True: {"operationId": "boolMethod"}},      # ``on:`` method
+        123: {"post": {"operationId": "intPath"}},
+    }}
+    inv = build_inventory(doc)                             # must not raise
+    ops = {e["operation_id"] for e in inv["endpoints"]}
+    assert "ok" in ops
+    assert "boolPath" not in ops and "boolMethod" not in ops
+
+
+@pytest.mark.parametrize("name,expected", [
+    ("id", True), ("ids", True), ("uuid", True), ("guid", True),
+    ("user_id", True), ("order_ids", True), ("accountId", True),
+    ("userID", True), ("orderIds", True), ("slug", True), ("token", True),
+    ("valid", False), ("grid", False), ("void", False), ("android", False),
+    ("hidden", False), ("invalid", False), ("name", False),
+])
+def test_id_param_precision(name, expected):
+    """Regression: id heuristic must not over-match valid/grid/android/void."""
+    inv = build_inventory({"openapi": "3.0.0", "paths": {"/x": {"get": {
+        "operationId": "x",
+        "parameters": [{"name": name, "in": "query"}]}}}})
+    assert inv["endpoints"][0]["object_scoped"] is expected
+
+
+def test_malformed_security_entry_doesnt_crash():
+    """Regression: security: [null] / non-mapping entries must be skipped."""
+    doc = {"openapi": "3.0.0", "security": [None, {"bearerAuth": []}],
+           "paths": {"/x": {"get": {"operationId": "x"}}}}
+    inv = build_inventory(doc)                             # must not raise
+    ep = inv["endpoints"][0]
+    assert ep["auth_required"] is True
+    assert ep["security"] == ["bearerAuth"]
 
 
 def test_cyclic_ref_terminates():

@@ -17,6 +17,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl
 
 try:  # PyYAML is present in the RAPTOR environment; degrade if not.
     import yaml  # type: ignore
@@ -26,15 +27,28 @@ except Exception:  # pragma: no cover - exercised only on stripped envs
 
 
 # --- Object-id heuristics ---------------------------------------------------
-# A path/query parameter whose name matches one of these is treated as an
-# object reference — the raw material for a BOLA (API1) test. Anchored,
-# case-insensitive, label-aware (matches ``id``, ``user_id``, ``uuid``,
-# ``accountId``, ``guid`` but not ``valid`` or ``hidden``).
-_ID_PARAM_RE = re.compile(
-    r"(^|[_-])(id|ids|uid|guid|uuid|slug|key|ref|token|"
-    r"[a-z]+_id|[a-z]+id)$",
-    re.IGNORECASE,
-)
+# A path/query parameter whose name looks like an object reference is the
+# raw material for a BOLA (API1) test. We deliberately favour precision over
+# recall: a false positive pollutes the operator's authz matrix with a
+# spurious test target, which is worse than missing an oddly-named id.
+#
+# An id name is: one of a small set of exact names; OR a ``_id``/``_ids``
+# snake-case suffix (case-insensitive); OR a camelCase/UPPER ``Id``/``ID``
+# suffix (case-SENSITIVE — the capital is what distinguishes ``userId`` from
+# the ``id`` inside ``valid``/``grid``/``android``/``void``).
+_ID_EXACT = {"id", "ids", "uid", "guid", "uuid", "slug", "key", "ref", "token"}
+_ID_SNAKE_RE = re.compile(r"(_id|_ids)$", re.IGNORECASE)
+_ID_CAMEL_RE = re.compile(r"[a-z](Id|Ids|ID)$")  # case-sensitive on purpose
+
+
+def _is_id_param(name: str) -> bool:
+    """True when a parameter name denotes an object reference (see above)."""
+    if not name:
+        return False
+    n = name.strip()
+    return (n.lower() in _ID_EXACT
+            or bool(_ID_SNAKE_RE.search(n))
+            or bool(_ID_CAMEL_RE.search(n)))
 
 # Path or operation text hinting at a privileged / function-level surface
 # (drives the BFLA / API5 rows).
@@ -44,7 +58,10 @@ _PRIVILEGED_RE = re.compile(
     re.IGNORECASE,
 )
 
-_MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+# State-changing operations. "MUTATION" is here so GraphQL mutations get
+# property-level (API3) and privileged (BFLA/API5) treatment like their REST
+# write-verb counterparts — they are exactly the state-changing surface.
+_MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE", "MUTATION"}
 _HTTP_METHODS = {"GET", "PUT", "POST", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE"}
 
 
@@ -71,6 +88,19 @@ def load_spec(path: Path) -> Any:
     )
 
 
+def _graphql_schema(doc: Any) -> dict | None:
+    """Return the introspection ``__schema`` object — bare or wrapped in the
+    standard ``{"data": {...}}`` envelope — or None. Single source of truth
+    for how introspection results are unwrapped (used by detect_kind and the
+    parser, so a new envelope shape is edited in one place)."""
+    if not isinstance(doc, dict):
+        return None
+    schema = doc.get("__schema")
+    if schema is None and isinstance(doc.get("data"), dict):
+        schema = doc["data"].get("__schema")
+    return schema if isinstance(schema, dict) else None
+
+
 def detect_kind(doc: Any) -> str:
     """Classify a loaded description. Returns one of
     ``openapi`` | ``postman`` | ``graphql`` | ``unknown``.
@@ -79,11 +109,8 @@ def detect_kind(doc: Any) -> str:
         return "unknown"
     if "openapi" in doc or "swagger" in doc:
         return "openapi"
-    # GraphQL introspection: either bare __schema or wrapped in data.
-    schema = doc.get("__schema")
-    if schema is None and isinstance(doc.get("data"), dict):
-        schema = doc["data"].get("__schema")
-    if isinstance(schema, dict) and "types" in schema:
+    schema = _graphql_schema(doc)
+    if schema is not None and "types" in schema:
         return "graphql"
     # Postman collection v2.x: has info + item[].
     info = doc.get("info")
@@ -136,7 +163,7 @@ def _schema_fields(doc: dict, schema: Any) -> list[str]:
 
 def _is_object_scoped(path_params: list[str], query_params: list[str], path: str) -> bool:
     for name in (*path_params, *query_params):
-        if _ID_PARAM_RE.search(name or ""):
+        if _is_id_param(name or ""):
             return True
     # A templated segment in the path (``/users/{id}``) is an object ref
     # even if the param metadata was omitted from the spec.
@@ -206,10 +233,14 @@ def _parse_openapi(doc: dict) -> tuple[list[dict], str]:
 
     idx = 1
     for path, item in (doc.get("paths") or {}).items():
-        if not isinstance(item, dict):
+        # YAML permits non-string keys (a bare ``on:`` decodes to True, a
+        # numeric key to int); skip them rather than crash on ``.upper()``.
+        if not isinstance(path, str) or not isinstance(item, dict):
             continue
         shared_params = item.get("parameters", []) or []
         for method, op in item.items():
+            if not isinstance(method, str):
+                continue
             if method.upper() not in _HTTP_METHODS or not isinstance(op, dict):
                 continue
             params = [*shared_params, *(op.get("parameters", []) or [])]
@@ -243,7 +274,10 @@ def _parse_openapi(doc: dict) -> tuple[list[dict], str]:
 
             op_security = op.get("security")
             security = op_security if op_security is not None else global_security
-            sec_names = [k for entry in (security or []) for k in entry] if security else []
+            # A hand-edited spec may carry ``security: [null]`` or non-mapping
+            # entries; skip them rather than raise TypeError on ``for k in entry``.
+            sec_names = [k for entry in (security or [])
+                         if isinstance(entry, dict) for k in entry]
 
             endpoints.append(_endpoint(
                 idx, method, path,
@@ -264,9 +298,17 @@ def _parse_openapi(doc: dict) -> tuple[list[dict], str]:
 def _postman_url_path(url: Any) -> tuple[str, list[str]]:
     """Return (path, query_param_names) from a Postman url node."""
     if isinstance(url, str):
-        m = re.match(r"[a-z]+://[^/]+(/[^?]*)?(\?(.*))?", url, re.IGNORECASE)
-        path = (m.group(1) if m and m.group(1) else url) if m else url
-        return path, []
+        raw, _, query_str = url.partition("?")
+        # Strip scheme://host if present, keeping the path; a template-var or
+        # bare-path url (no ``://``) is kept verbatim as the path.
+        m = re.match(r"[a-z][a-z0-9+.-]*://[^/]+(/.*)?$", raw, re.IGNORECASE)
+        path = m.group(1) if (m and m.group(1)) else raw
+        query, seen = [], set()
+        for key, _val in parse_qsl(query_str, keep_blank_values=True):
+            if key and key not in seen:
+                seen.add(key)
+                query.append(key)
+        return path or raw, query
     if isinstance(url, dict):
         segs = url.get("path", [])
         if isinstance(segs, list):
@@ -342,10 +384,8 @@ def _parse_postman(doc: dict) -> tuple[list[dict], str]:
 # --- GraphQL introspection --------------------------------------------------
 
 def _parse_graphql(doc: dict) -> tuple[list[dict], str]:
-    schema = doc.get("__schema")
-    if schema is None and isinstance(doc.get("data"), dict):
-        schema = doc["data"].get("__schema")
-    if not isinstance(schema, dict):
+    schema = _graphql_schema(doc)
+    if schema is None:
         return [], ""
     type_map = {t.get("name"): t for t in schema.get("types", [])
                 if isinstance(t, dict)}
@@ -371,7 +411,7 @@ def _parse_graphql(doc: dict) -> tuple[list[dict], str]:
                 summary=field.get("description", "") or "",
                 auth_required=False,  # GraphQL auth lives in resolvers, not schema
                 security=[],
-                path_params=[a for a in args if _ID_PARAM_RE.search(a or "")],
+                path_params=[a for a in args if _is_id_param(a or "")],
                 query_params=args,
                 body_fields=[] if op_kind == "QUERY" else args,
             ))
