@@ -42,6 +42,7 @@ When a `/command` fires:
 
 /project - Project management — `libexec/raptor-project-manager <subcommand> [args]`
 /scan /fuzz /web /codeql /analyze - Security testing — `python3 raptor.py <command>`
+/api - API security testing (OWASP API Top 10 2023) — `dispatch: skill`, see below
 /agentic - Scan → dedup → analysis pipeline — `libexec/raptor-agentic --repo <path>`
 /exploit /patch - Generate PoCs and fixes (beta) — `python3 raptor.py agentic`
 /validate - Exploitability validation pipeline — `dispatch: skill`, see below
@@ -243,6 +244,24 @@ The `/audit` command runs a hypothesis-driven code audit with tool verification.
 **Dispatch:** `dispatch: skill` — `.claude/commands/audit.md` contains execution steps including mode routing (`--model` → orchestrator, `--local` / default → in-session).
 
 See `docs/audit.md` for the full pipeline, gates, strategies, and tool menu. `/review` is the companion operator CLI for navigating results across all four layers (coverage, journal, context-map, annotations).
+
+---
+
+## API SECURITY TESTING
+
+The `/api` command runs a phase-driven API penetration test built around the **OWASP API Security Top 10 (2023)** with an **authorization-first** methodology. Phase 0 is mechanical (`libexec/raptor-api-inventory` parses an OpenAPI/Swagger spec, Postman collection, or GraphQL introspection result into `api-inventory.json` + a seed `authz-matrix.json`); phases 1–7 are LLM-driven and follow the skill files.
+
+**Usage:** `/api <target> [--spec <file>] [--base-url <url>] [--phase <0-7|all>] [--roles a,b,...] [--scope-file <f>] [--out <dir>]`
+
+**Dispatch:** `dispatch: skill` — `.claude/commands/api.md` owns the execution steps; `.claude/skills/api-testing/` holds `SKILL.md` (gates, schemas) and `phase-0..7-*.md`.
+
+**AUTHORIZATION GATE:** active testing sends real requests — no active phase without confirmed written authorization (GATE-A1). Spec-only analysis is always safe. Resource/DoS-class tests (API4/API6) are passive-only unless explicitly authorized.
+
+**Phases:** 0 inventory (API9) → 1 recon → 2 authn (API2) → 3 **authorization: BOLA/BFLA/property (API1/3/5)** → 4 input & SSRF (API7) → 5 business logic & resource abuse (API4/6) → 6 config & unsafe consumption (API8/10) → 7 report. Phase 3 is the core and gets the most effort — authorization and business-logic flaws are the ones scanners cannot find.
+
+**Mechanical inventory:** `libexec/raptor-api-inventory --spec <file> --out-dir <dir> [--base-url <url>] [--roles <csv>]` is offline (no network, no LLM). Logic lives in `core/apitest/inventory.py`; tests in `core/apitest/tests/`.
+
+See `docs/api-testing.md` for the artifact schemas, heuristics, and integration with `/understand` and `/validate`.
 
 ---
 

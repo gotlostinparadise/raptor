@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""Build an API endpoint inventory + seed authorization test matrix from
+a local API description — OFFLINE, no network, no LLM.
+
+Feeds the ``/api`` workflow (Phase 0) with mechanical ground truth so the
+LLM tests a parsed endpoint list instead of guessing surface from prose.
+
+Supported inputs (auto-detected):
+  * OpenAPI 3.x / Swagger 2.0     — JSON or YAML
+  * Postman collection v2.x       — JSON
+  * GraphQL introspection result  — JSON
+
+Usage:
+  raptor-api-inventory --spec openapi.yaml --out-dir <dir>
+  raptor-api-inventory --spec collection.json --base-url https://api.example.com
+  raptor-api-inventory --spec schema.json --stdout
+
+Output (under --out-dir, default <cwd>):
+  api-inventory.json   normalised endpoints; schema in docs/api-testing.md
+  authz-matrix.json    seed BOLA/BFLA/property-level test rows
+
+--stdout writes api-inventory.json to stdout and skips file writes.
+Exit codes: 0 ok, 2 usage/parse error.
+"""
+import argparse
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.apitest import build_authz_matrix, build_inventory, load_spec  # noqa: E402
+
+
+def _parse_args(argv):
+    p = argparse.ArgumentParser(
+        prog="raptor-api-inventory",
+        description="Parse an API description into an inventory + authz matrix.",
+    )
+    p.add_argument("--spec", type=Path, required=True,
+                   help="OpenAPI/Swagger (JSON/YAML), Postman, or GraphQL introspection file")
+    p.add_argument("--out-dir", type=Path, default=None,
+                   help="output directory (default: current directory)")
+    p.add_argument("--base-url", default="",
+                   help="base URL to record (overrides any found in the spec)")
+    p.add_argument("--roles", default="",
+                   help="comma-separated role names for the authz matrix "
+                        "(default: anonymous,user_a,user_b,admin)")
+    p.add_argument("--stdout", action="store_true",
+                   help="print api-inventory.json to stdout; write no files")
+    return p.parse_args(argv)
+
+
+def main(argv=None):
+    args = _parse_args(argv if argv is not None else sys.argv[1:])
+
+    if not args.spec.is_file():
+        print(f"error: spec not found: {args.spec}", file=sys.stderr)
+        return 2
+    try:
+        doc = load_spec(args.spec)
+        inventory = build_inventory(doc, source_path=str(args.spec),
+                                    base_url=args.base_url)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    stamp = datetime.now(timezone.utc).isoformat()
+    inventory["generated_at"] = stamp
+    roles = [r.strip() for r in args.roles.split(",") if r.strip()] or None
+    matrix = build_authz_matrix(inventory, roles=roles)
+    matrix["generated_at"] = stamp
+
+    if args.stdout:
+        json.dump(inventory, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0
+
+    out_dir = args.out_dir or Path.cwd()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "api-inventory.json").write_text(
+        json.dumps(inventory, indent=2), encoding="utf-8")
+    (out_dir / "authz-matrix.json").write_text(
+        json.dumps(matrix, indent=2), encoding="utf-8")
+
+    ep = inventory["endpoint_count"]
+    print(f"api-inventory.json: {ep} endpoints "
+          f"({inventory['object_scoped_count']} object-scoped, "
+          f"{inventory['privileged_count']} privileged, "
+          f"{inventory['no_auth_count']} no-auth) [{inventory['source_kind']}]")
+    print(f"authz-matrix.json: {matrix['test_count']} seed authz tests")
+    print(f"OUT_DIR={out_dir}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
