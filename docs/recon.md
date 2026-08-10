@@ -98,6 +98,21 @@ graph and the app graph share one lifecycle run dir. It forwards optional
 passes none; a caller with a `/webauthz` identity config supplies them). Recon
 profiles map to webgraph profiles `passive→passive`, `home→safe`, `vps→aggressive`.
 
+`--web --url-history` additionally opts into the passive
+`core/webgraph/url_history.py:UrlHistorySource` — the pure-Python `gau`/
+`waybackurls` analogue that mines `web.archive.org` for historical endpoints,
+parameters, and pages (egress-allowlisted to the archive). It is **not**
+auto-registered: it has no availability gate, so it would otherwise run — and
+contact a third party — in every web run; the bridge/CLI instantiate it
+explicitly only when asked.
+
+### Persisted scope
+
+`/recon` with no roots falls back to the active project's `recon_scope`
+(`core/project/project.py`, schema v4) — `{"roots": [...], "profile": "home"}`,
+set via `ProjectManager.set_recon_scope(...)` and modelled on the `binaries`
+field. Explicit CLI roots / `--profile` always win.
+
 ---
 
 ## Censys (`core/recon/censys.py`, `/censys`, `libexec/raptor-censys`)

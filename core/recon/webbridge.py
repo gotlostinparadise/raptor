@@ -60,6 +60,7 @@ def build_web_graph(
     session: Optional[Any] = None,
     oast: Optional[Any] = None,
     extra_origins: Sequence[str] = (),
+    include_url_history: bool = False,
 ) -> Any:
     """Build the app-layer graph from a completed recon run's origins.
 
@@ -68,6 +69,11 @@ def build_web_graph(
     or off an existing run dir), derives origins, and writes the web graph under
     ``<out_dir>/web/``. ``authorization`` is threaded through so an active web
     profile inherits the same attestation the recon run was authorized with.
+
+    ``include_url_history`` opts into the passive
+    :class:`core.webgraph.url_history.UrlHistorySource` (archive.org endpoint
+    mining) — off by default because it contacts a third party; passing origins
+    is otherwise the only surface seeded here.
     """
     from core.recon.orchestrator import load_records
     from core.webgraph.orchestrator import run_webgraph
@@ -81,9 +87,17 @@ def build_web_graph(
 
     web_profile = _PROFILE_MAP.get(profile, "safe")
 
+    # Default source set (``None``) lets the registered spec/browser sources
+    # gate themselves off; url_history is explicit opt-in (never auto-registered).
+    sources = None
+    if include_url_history:
+        from core.webgraph.url_history import UrlHistorySource
+        sources = [UrlHistorySource()]
+
     return run_webgraph(
         origins,
         out / "web",
+        sources=sources,
         profile=web_profile,
         session=session,
         oast=oast,

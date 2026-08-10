@@ -39,8 +39,9 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="run directory (raw/ normalized/ graph/ written here)")
     p.add_argument("--scope-file", default=None,
                    help="file of in-scope roots, one per line (# comments ok)")
-    p.add_argument("--profile", default=DEFAULT_PROFILE, choices=sorted(PROFILES),
-                   help="safety profile (passive = zero traffic to the target)")
+    p.add_argument("--profile", default=None, choices=sorted(PROFILES),
+                   help="safety profile (passive = zero traffic to the target); "
+                        "defaults to the active project's recon_scope, else 'home'")
     p.add_argument("--active", action="store_true",
                    help="permit active sources (required for home/vps profiles)")
     p.add_argument("--authorization", default="",
@@ -49,6 +50,9 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="comma-separated IPs to seed enrichment (skip active DNS)")
     p.add_argument("--web", action="store_true",
                    help="also build the app-layer graph from discovered origins")
+    p.add_argument("--url-history", action="store_true",
+                   help="with --web, mine archive.org for historical endpoints "
+                        "(passive third-party lookup)")
     p.add_argument("--max-rounds", type=int, default=3,
                    help="max discovery-loop rounds (default 3)")
     p.add_argument("--rebuild", action="store_true",
@@ -67,6 +71,26 @@ def _roots(args: argparse.Namespace) -> List[str]:
                 roots.append(line)
     # de-dup, preserve order
     return list(dict.fromkeys(roots))
+
+
+def _project_scope() -> tuple:
+    """(roots, profile) persisted on the active project, or ([], None).
+
+    Lets ``/recon`` (no args) reuse a project's ``recon_scope``. Every step is
+    guarded — no active project, no ProjectManager, or a malformed scope all fall
+    back to "nothing persisted" rather than erroring.
+    """
+    try:
+        from core.project.project import ProjectManager
+        proj = ProjectManager().get_active()
+        if proj and isinstance(proj.recon_scope, dict):
+            roots = [str(r) for r in (proj.recon_scope.get("roots") or [])
+                     if isinstance(r, str) and r.strip()]
+            profile = proj.recon_scope.get("profile")
+            return roots, (profile if profile in PROFILES else None)
+    except Exception:
+        pass
+    return [], None
 
 
 def _resolve_credentials() -> Dict[str, str]:
@@ -102,13 +126,13 @@ def _render(summary: RunSummary) -> str:
     return "\n".join(lines)
 
 
-def _authorization_ok(args: argparse.Namespace) -> Optional[str]:
+def _authorization_ok(profile: str, args: argparse.Namespace) -> Optional[str]:
     """Return an error string if the active-testing gate is not satisfied."""
-    prof = PROFILES[args.profile]
+    prof = PROFILES[profile]
     if not prof.allow_active:
         return None  # passive profile: always permitted
     if not args.active:
-        return (f"profile {args.profile!r} runs active sources; pass --active "
+        return (f"profile {profile!r} runs active sources; pass --active "
                 f"to confirm, or use --profile passive for zero target traffic")
     if not args.authorization.strip():
         return ("--active requires --authorization \"<written authorization>\" — "
@@ -120,6 +144,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
     roots = _roots(args)
 
+    # Fall back to the active project's persisted scope when none was passed.
+    proj_profile = None
+    if not roots:
+        roots, proj_profile = _project_scope()
+    profile = args.profile or proj_profile or DEFAULT_PROFILE
+
     if args.rebuild:
         graph = rebuild_from_disk(args.out_dir, roots)
         stats = graph.stats()
@@ -128,11 +158,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     if not roots:
-        print("error: no in-scope roots (pass positional roots or --scope-file)",
-              file=sys.stderr)
+        print("error: no in-scope roots (pass positional roots, --scope-file, "
+              "or set the active project's recon_scope)", file=sys.stderr)
         return 2
 
-    gate_err = _authorization_ok(args)
+    gate_err = _authorization_ok(profile, args)
     if gate_err:
         print(f"error: {gate_err}", file=sys.stderr)
         return 2
@@ -145,7 +175,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     seed_ips = [ip.strip() for ip in args.seed_ips.split(",") if ip.strip()]
 
     summary = run_recon(
-        roots, args.out_dir, profile=args.profile, max_rounds=args.max_rounds,
+        roots, args.out_dir, profile=profile, max_rounds=args.max_rounds,
         env=env, credentials=credentials, seed_ips=seed_ips,
     )
 
@@ -153,8 +183,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.web:
         from core.recon.webbridge import build_web_graph
         web_summary = build_web_graph(
-            args.out_dir, roots, profile=args.profile,
+            args.out_dir, roots, profile=profile,
             authorization=args.authorization,
+            include_url_history=args.url_history,
         )
 
     if args.stdout:
