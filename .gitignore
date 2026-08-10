@@ -40,3 +40,6 @@ tuning.json
 
 # OmniRoute gateway config — holds a live API key. Track .omni.sample instead.
 .omni
+
+# Censys API credentials — holds a live API key.
+.censys
