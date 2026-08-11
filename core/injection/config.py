@@ -66,6 +66,7 @@ def _point_from(d: Mapping[str, Any]) -> InjectionPoint:
     return InjectionPoint(
         method=d.get("method", "GET"), path=d["path"], param=d["param"],
         location=d.get("location", "query"), content_type=d.get("content_type", "form"),
+        others=dict(d.get("others") or {}),
     )
 
 

