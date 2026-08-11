@@ -51,6 +51,21 @@ When a `/command` fires:
 /review - Navigate audit results — `libexec/raptor-review $ARGUMENTS`
 /annotate - Per-function prose annotations (human-only) — `libexec/raptor-annotate <subcommand> [args]`
 
+**Web pentest platform** (dynamic web/API testing — LLM proposes, a tool/oracle verifies; every active command is safe-by-default: dry-run unless `--active` + a declared `authorization` + a non-passive profile):
+/webpentest - **Single entry point** — chains all phases below (map→test→prove→report) over one run dir + one authorization gate — `libexec/raptor-webpentest`
+/webgraph - App-layer request/traffic graph (spec import + DOM-aware browser crawl) — `libexec/raptor-webgraph`
+/webauthz - Access control IDOR/BOLA/BFLA via multi-identity replay (authz-diff oracle) — `libexec/raptor-webauthz`
+/inject - Deep injection (SQLi/SSTI/cmdi/SSRF/XXE/NoSQLi/path) with real oracles + OAST for blind — `libexec/raptor-inject`
+/graphql - GraphQL introspection + alias/batching DoS — `libexec/raptor-graphql`
+/clientside - CORS/CSP/clickjacking/cookie-flags/open-redirect — `libexec/raptor-clientside`
+/discover - JS endpoint+secret mining, exposed-file probes, source-map recovery — `libexec/raptor-discover`
+/nuclei - Nuclei template scan + tech→CVE correlation over the recon graph — `libexec/raptor-nuclei`
+/race - Business-logic & race conditions (concurrent replay + state oracle) — `libexec/raptor-race`
+/waf - WAF detection + payload-evasion mutations — `libexec/raptor-waf`
+/repeater - Burp-repeater analog: send/tamper + runnable PoC (curl/python/http) — `libexec/raptor-repeater`
+
+The four foundational primitives these build on are libraries under `core/`: `core/browser` (Playwright+Chromium harness), `core/oast` (out-of-band collaborator), `core/session` (multi-identity engine + authorization oracle), `core/webgraph` (the `(type,id)` merge graph + orchestrator). Confirmed findings carry a tool-produced proof (`authz_diff` / `oast_callback` / `reflected_marker` / `state_oracle`) and surface via `libexec/raptor-verified-outcomes`. See `docs/web-pentest.md`.
+
 **Coverage:** When asked about coverage, run `libexec/raptor-coverage-summary` (no args = active project). Use `--detailed` for per-file table, `--gaps` for unreviewed functions. See `.claude/skills/coverage.md` for mark/unmark and the full API.
 
 **Note:** `/agentic` runs scan → dedup → prep → analysis (with validation methodology). Use `--sequential` to bypass parallel orchestration. Use `--understand` to pre-map the codebase before scanning, and `--validate` to run the full validation pipeline on exploitable findings afterwards. Both flags are opt-in. Multi-model: `--model` is repeatable — multiple models each independently analyse every finding, then results are correlated; `--consensus`, `--judge`, and `--aggregate` add optional review/synthesis models.
@@ -65,7 +80,7 @@ When a `/command` fires:
 
 **SAGE:** `libexec/raptor-sage` is the mechanical CLI for SAGE persistent memory (status, recall, list, remember, forget, domains, timeline, backlog, task, link, corroborate, get). When asked about SAGE memories, what SAGE knows, or to store/recall knowledge, route to this. If SAGE is not installed, run `libexec/raptor-sage-setup` to install the Docker sidecar and embedding model.
 
-**Verified outcomes:** When asked what RAPTOR has confirmed, proven, or verified, run `libexec/raptor-verified-outcomes <output_dir>` (or `--project-root <dir>` for cross-run view). Surfaces oracle-verified confirmations from `/fuzz`, `/agentic`, `/crash-analysis`, `/validate` in one place.
+**Verified outcomes:** When asked what RAPTOR has confirmed, proven, or verified, run `libexec/raptor-verified-outcomes <output_dir>` (or `--project-root <dir>` for cross-run view). Surfaces oracle-verified confirmations from `/fuzz`, `/agentic`, `/crash-analysis`, `/validate`, and the web pentest commands (`/webauthz`, `/inject`, `/graphql`, `/clientside`, `/discover`, `/nuclei`, `/race`) in one place.
 
 ---
 

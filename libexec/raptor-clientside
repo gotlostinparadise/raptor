@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""Client-side / configuration testing — CORS, CSP, clickjacking, cookies, open redirect.
+
+Reads misconfigurations straight off the wire: a reflected CORS origin (with
+credentials), an unsafe/absent CSP, a framable page (no X-Frame-Options /
+frame-ancestors), cookies missing Secure/HttpOnly/SameSite, and redirect
+parameters that send users to an external host. Each is confirmed by the response
+evidence and recorded as a proven finding.
+
+SAFE BY DEFAULT: probes are benign but still require --active AND a declared
+`authorization`. Without --active you get a dry-run plan.
+
+Usage:
+  raptor-clientside --out-dir <dir> --url https://app.example.com                (dry-run)
+  raptor-clientside --out-dir <dir> --url https://app.x --authorization Y --active
+  raptor-clientside --out-dir <dir> --config clientside.json --active
+
+Exit codes: 0 ok, 2 usage / gate error.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.clientside.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

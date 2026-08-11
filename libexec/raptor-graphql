@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""GraphQL security testing — introspection + alias/batching DoS.
+
+Confirms two GraphQL-specific weaknesses generic scanners miss: introspection
+left open in production (information disclosure), and alias/batching
+amplification (a DoS vector, resource-class — opt in with --resource-tests).
+Argument injection is delegated to /inject and field-level authorization to
+/webauthz (a GraphQL query is a POST /graphql body those tools already handle).
+
+SAFE BY DEFAULT: no request is sent unless --active is passed AND the config
+declares a non-empty `authorization`.
+
+Usage:
+  raptor-graphql --out-dir <dir> --url https://api.example.com/graphql          (dry-run)
+  raptor-graphql --out-dir <dir> --url https://api.x/graphql --authorization Y --active
+  raptor-graphql --out-dir <dir> --config graphql.json --active --resource-tests
+
+Exit codes: 0 ok, 2 usage / gate error.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.graphql.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

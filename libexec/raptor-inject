@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""Deep injection testing with real oracles — beyond the OWASP heuristic pass.
+
+SSTI, command injection, SQL injection (error + blind boolean), NoSQLi, path
+traversal, SSRF (cloud-metadata + blind). Blind variants (SSRF/XXE/RCE/OOB-SQLi)
+are confirmed out-of-band via an OAST collaborator. The verdict is always a
+tool's — a computed marker echoed back, a DB error signature, a boolean response
+asymmetry, metadata content, or an OAST callback — never an LLM guess.
+
+SAFE BY DEFAULT: no payload is sent unless --active is passed AND the config
+declares a non-empty `authorization`. Without --active you get a dry-run plan.
+
+Usage:
+  raptor-inject --out-dir <dir> --config injection.json                 (dry-run)
+  raptor-inject --out-dir <dir> --config injection.json --active
+  raptor-inject --out-dir <dir> --from-webgraph <wg-dir> --base-url https://x \
+                --authorization "engagement Y" --active
+  raptor-inject ... --oast-domain oast.example --oast-poll-url https://collector/poll
+
+Exit codes: 0 ok, 2 usage / gate error.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.injection.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())
