@@ -116,3 +116,51 @@ jobs:
           path: ${{ runner.temp }}/integration-attempt-*.xml
           retention-days: 14
           if-no-files-found: ignore
+
+  browser-integration:
+    # The headless-Chromium integration tests — core/browser (BrowserHarness,
+    # DOM-aware crawl) and the SPA hash-route DOM-XSS confirmation in
+    # core/injection — skip everywhere else: pytest.ini deselects `integration`,
+    # and even the slow-integration job above has no browser installed, so their
+    # `skipif(not H.available())` guard skips them. This job is the ONLY place
+    # they execute in CI. Their traffic is all loopback / `data:` (deterministic,
+    # no third-party egress), so a failure here is a genuine regression in the
+    # capture→graph→harvest→build→navigate→poll chain, NOT an external flake.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "requirements*.txt"
+
+      - name: Create venv and install deps
+        run: |
+          uv venv $VENV_PATH
+          source $VENV_PATH/bin/activate
+          uv pip install -r requirements-dev.txt
+          # Playwright is an optional extra (commented out in requirements.txt);
+          # the browser harness is import-guarded, so install it explicitly here.
+          uv pip install playwright==1.60.0
+
+      - name: Install Chromium + OS deps
+        run: |
+          source $VENV_PATH/bin/activate
+          playwright install --with-deps chromium
+
+      - name: Run browser + DOM-XSS integration tests
+        run: |
+          source $VENV_PATH/bin/activate
+          python -m pytest -m integration core/browser core/injection \
+            -q --durations=10 --tb=short
