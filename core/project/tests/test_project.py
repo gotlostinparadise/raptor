@@ -228,6 +228,22 @@ class TestProjectManager(unittest.TestCase):
         self.assertEqual(p.description, "test app")
         self.assertTrue((self.projects_dir / "myapp.json").exists())
 
+    def test_create_url_target_not_mangled(self):
+        # Regression: a URL/domain target (web app, /recon) is stored
+        # verbatim, not run through Path.resolve() which would turn
+        # 'https://host' into '<cwd>/https:/host'. It must also round-trip
+        # through the lifecycle target match (find_project_for_target).
+        p = self.mgr.create("web", "https://bitpapa.com")
+        self.assertEqual(p.target, "https://bitpapa.com")
+        found = self.mgr.find_project_for_target("https://bitpapa.com")
+        self.assertIsNotNone(found)
+        self.assertEqual(found.name, "web")
+
+    def test_create_path_target_still_resolved(self):
+        # Filesystem targets keep the existing absolutise behaviour.
+        p = self.mgr.create("code", self.target_code)
+        self.assertEqual(p.target, str(Path(self.target_code).resolve()))
+
     def test_create_rejects_traversal_name(self):
         with self.assertRaises(ValueError):
             self.mgr.create("../../etc", self.target_code)
