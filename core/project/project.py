@@ -18,6 +18,27 @@ from core.logging import get_logger
 
 logger = get_logger()
 
+# URL/domain targets (web apps, /recon) must never be run through
+# ``Path.resolve()`` — that mangles ``https://host`` into
+# ``<cwd>/https:/host`` (the ``//`` collapses and cwd is prepended).
+# Filesystem targets still resolve to an absolute path as before.
+_URL_SCHEME_RE = re.compile(r'\A[a-zA-Z][a-zA-Z0-9+.\-]*://')
+
+
+def _is_url_target(target: str) -> bool:
+    """True when ``target`` is a URL (``scheme://host``), not a path."""
+    return bool(_URL_SCHEME_RE.match((target or "").strip()))
+
+
+def _maybe_resolve_target(target: str, resolve_target: bool = True) -> str:
+    """Absolutise a filesystem target, but leave URL targets untouched.
+
+    ``resolve_target=False`` preserves the original string in all cases
+    (used by import, which keeps the source machine's path)."""
+    if not resolve_target or _is_url_target(target):
+        return target
+    return str(Path(target).resolve())
+
 # Default locations
 PROJECTS_DIR = Path.home() / ".raptor" / "projects"
 DEFAULT_OUTPUT_BASE = Path("out/projects")
@@ -315,7 +336,7 @@ class ProjectManager:
 
         project = Project(
             name=name,
-            target=str(Path(target).resolve()) if resolve_target else target,
+            target=_maybe_resolve_target(target, resolve_target),
             output_dir=output_dir,
             created=created or datetime.now(timezone.utc).isoformat(),
             description=description,
@@ -655,7 +676,7 @@ class ProjectManager:
         one project/store even though their ``target`` paths differ. Callers
         that have built an inventory pass its ``content_identity``; callers that
         haven't pass nothing and get the original path-only behaviour."""
-        resolved = str(Path(target).resolve())
+        resolved = _maybe_resolve_target(target)
         for project in self.list_projects():
             if project.target == resolved:
                 return project

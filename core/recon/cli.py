@@ -77,6 +77,12 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="re-derive graph exports from persisted records only")
     p.add_argument("--stdout", action="store_true",
                    help="print the run summary as JSON to stdout")
+    # Standard sandbox-control surface (--sandbox {full,network-only,none},
+    # --no-sandbox, --audit). Lets an operator disable isolation on a host
+    # where the recon tool binaries trip Landlock (e.g. no newuidmap/newgidmap
+    # -> Landlock-only mode can't open the pdtm binary -> exit 126).
+    from core.sandbox.cli import add_cli_args
+    add_cli_args(p)
     return p
 
 
@@ -178,7 +184,10 @@ def _authorization_ok(profile: str, args: argparse.Namespace) -> Optional[str]:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    args = _build_parser().parse_args(argv)
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    from core.sandbox.cli import apply_cli_args
+    apply_cli_args(args, parser)
     roots = _roots(args)
 
     # Fall back to the active project's persisted scope when none was passed.

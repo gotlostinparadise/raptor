@@ -31,6 +31,7 @@ its wrapped binary is on ``PATH`` (:func:`tool_available`), and tests inject.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -52,9 +53,42 @@ class ToolResult:
     timed_out: bool = False
 
 
+# ProjectDiscovery's tool-manager (pdtm) installs the real PD binaries here.
+# A RAPTOR venv commonly ships the *Python* ``httpx`` CLI, which shadows PD's
+# ``httpx`` on PATH and breaks the httpx source (wrong binary -> bad/empty
+# output). Prefer the pdtm install dir so a bare tool name resolves to
+# ProjectDiscovery's binary, not the collision. Override with RAPTOR_PDTM_BIN.
+def _pdtm_bin_dir() -> Path:
+    return Path(os.environ.get("RAPTOR_PDTM_BIN")
+                or os.path.expanduser("~/.pdtm/go/bin"))
+
+
+def resolve_binary(name: str) -> Optional[str]:
+    """Resolve a tool name to an executable path, preferring the pdtm install
+    dir over ``PATH`` (defeats the venv ``httpx`` shadow). A name that already
+    contains a path separator is honoured as-is. ``None`` when found nowhere."""
+    if os.sep in name or (os.altsep and os.altsep in name):
+        return name if os.access(name, os.X_OK) else None
+    cand = _pdtm_bin_dir() / name
+    if cand.is_file() and os.access(cand, os.X_OK):
+        return str(cand)
+    return shutil.which(name)
+
+
+def _resolve_argv0(cmd: Sequence[str]) -> List[str]:
+    """``cmd`` with argv[0] rewritten to the resolved PD binary path (no-op
+    when it can't be resolved — the OS/sandbox then does its own lookup)."""
+    out = list(cmd)
+    if out:
+        resolved = resolve_binary(out[0])
+        if resolved:
+            out[0] = resolved
+    return out
+
+
 def tool_available(binary: str) -> bool:
-    """True when ``binary`` is resolvable on ``PATH``."""
-    return shutil.which(binary) is not None
+    """True when ``binary`` resolves to an executable (pdtm dir or ``PATH``)."""
+    return resolve_binary(binary) is not None
 
 
 def parse_jsonl(stdout: str) -> List[Dict[str, Any]]:
@@ -116,7 +150,7 @@ def run_http_tool(
     from core.sandbox.context import run_untrusted_networked
     try:
         cp = run_untrusted_networked(
-            list(cmd),
+            _resolve_argv0(cmd),
             output=str(output),
             proxy_hosts=list(proxy_hosts),
             timeout=timeout,
@@ -162,7 +196,7 @@ def run_net_tool(
             caller_label="recon",
         ) as run:
             cp = run(
-                list(cmd),
+                _resolve_argv0(cmd),
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -194,7 +228,7 @@ def run_local_tool(
     from core.sandbox.context import run_trusted
     try:
         cp = run_trusted(
-            list(cmd), timeout=timeout, capture_output=True, text=True,
+            _resolve_argv0(cmd), timeout=timeout, capture_output=True, text=True,
             env=_child_env(env),
         )
     except subprocess.TimeoutExpired as exc:
