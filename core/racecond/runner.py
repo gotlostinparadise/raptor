@@ -113,7 +113,13 @@ def run_race(
     client = (client_factory or (lambda h: _client_for(config.base_url)))(
         [host] if host else [])
 
-    auth_headers: Dict[str, str] = {}
+    # Shared authenticated session: a static header snapshot (auth headers +
+    # Cookie for this origin) from the threaded session / config cookies+headers,
+    # attached to every concurrent request. A token_env bearer still wins if set.
+    from core.session.attach import merged_auth_headers
+    auth_headers: Dict[str, str] = dict(merged_auth_headers(
+        config.base_url, session=config.session,
+        cookies=config.cookies, headers=config.headers))
     if config.token_env:
         tok = resolve_credential(config.token_env, env)
         if tok:

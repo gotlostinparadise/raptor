@@ -35,6 +35,12 @@ class RaceConfig:
     authorization: str = ""
     token_env: str = ""
     max_concurrency: int = 50        # hard cap to avoid accidental load
+    # Shared authenticated session (see core.session.attach). A static snapshot
+    # (auth headers + Cookie) is attached to each concurrent request — race
+    # deliberately avoids per-identity session state (shared-jar racing).
+    cookies: Dict[str, str] = field(default_factory=dict)
+    headers: Dict[str, str] = field(default_factory=dict)
+    session: Any = field(default=None, repr=False, compare=False)
 
 
 def _test_from(d: Mapping[str, Any]) -> RaceTest:
@@ -60,6 +66,7 @@ def from_dict(data: Mapping[str, Any]) -> RaceConfig:
         base_url=base_url, tests=[_test_from(t) for t in (data.get("tests") or [])],
         authorization=data.get("authorization", ""), token_env=data.get("token_env", ""),
         max_concurrency=int(data.get("max_concurrency", 50)),
+        cookies=dict(data.get("cookies") or {}), headers=dict(data.get("headers") or {}),
     )
 
 

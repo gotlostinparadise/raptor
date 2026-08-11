@@ -51,12 +51,13 @@ class DiscoveryRun:
         }
 
 
-def _fetch(client, url: str) -> Response:
+def _fetch(client, url: str, headers=None) -> Response:
     try:
-        return client.request("GET", url, raise_on_status=False, follow_redirects=True)
+        return client.request("GET", url, headers=headers, raise_on_status=False,
+                              follow_redirects=True)
     except TypeError:
         try:
-            return client.request("GET", url, follow_redirects=True)
+            return client.request("GET", url, headers=headers, follow_redirects=True)
         except HttpError as exc:
             return Response(status=int(exc.status or 0), headers={}, body=b"", url=url)
 
@@ -96,6 +97,13 @@ def run_discovery(
     host = urlsplit(config.base_url).hostname or ""
     client = (client_factory or (lambda h: _client_for(config.base_url)))(
         [host] if host else [])
+
+    # Shared authenticated session: one static header snapshot (auth headers +
+    # Cookie for this origin) attached to every discovery fetch, so JS mining and
+    # exposed-file probes run authenticated when a session was threaded in.
+    from core.session.attach import merged_auth_headers
+    auth = merged_auth_headers(config.base_url, session=config.session,
+                               cookies=config.cookies, headers=config.headers) or None
 
     recs: Dict[str, List[Dict[str, Any]]] = {}
     vulns: List[Dict[str, Any]] = []
@@ -137,7 +145,7 @@ def run_discovery(
     # --- base page + its JavaScript ---
     try:
         run.requests_sent += 1
-        base = _fetch(client, config.base_url)
+        base = _fetch(client, config.base_url, auth)
         html = base.body.decode("utf-8", errors="replace") if base.body else ""
         harvest(html, config.base_url)
         for src in extractors.script_srcs(html):
@@ -145,7 +153,7 @@ def run_discovery(
             if origin and canonical_origin(js_url) and canonical_origin(js_url) != origin:
                 continue
             run.requests_sent += 1
-            js = _fetch(client, js_url)
+            js = _fetch(client, js_url, auth)
             js_text = js.body.decode("utf-8", errors="replace") if js.body else ""
             harvest(js_text, js_url)
             smap = extractors.source_map_url(js_text)
@@ -158,7 +166,7 @@ def run_discovery(
                     run.warnings.append(f"skipped off-origin source map: {smap}")
                     continue
                 run.requests_sent += 1
-                mp = _fetch(client, smap_url)
+                mp = _fetch(client, smap_url, auth)
                 sources = probes.recover_sources(mp.body or b"")
                 if sources:
                     add_vuln("source_map_exposed", endpoint_id("GET", "/"), "medium",
@@ -173,7 +181,7 @@ def run_discovery(
             url = urljoin(config.base_url.rstrip("/") + "/", path)
             try:
                 run.requests_sent += 1
-                f = probes.check_exposed(path, sig, _fetch(client, url))
+                f = probes.check_exposed(path, sig, _fetch(client, url, auth))
                 if f:
                     run.exposed_files += 1
                     add_vuln("exposed_file", endpoint_id("GET", "/" + path), "high",

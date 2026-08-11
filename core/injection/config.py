@@ -43,6 +43,13 @@ class InjectionConfig:
     classes: List[str] = field(default_factory=lambda: list(ALL_CLASSES))
     authorization: str = ""
     token_env: str = ""            # optional bearer token for authenticated injection
+    # Shared authenticated session (see core.session.attach). ``cookies`` /
+    # ``headers`` authenticate a standalone run; ``session`` is a live
+    # SessionEngine the orchestrator threads in (cookie jar + bearer at once) —
+    # never serialised, so ``from_dict`` leaves it None.
+    cookies: Dict[str, str] = field(default_factory=dict)
+    headers: Dict[str, str] = field(default_factory=dict)
+    session: Any = field(default=None, repr=False, compare=False)
 
     def enabled_classes(self, *, have_oast: bool) -> List[str]:
         out = [c for c in self.classes if c in ALL_CLASSES]
@@ -67,6 +74,7 @@ def from_dict(data: Mapping[str, Any]) -> InjectionConfig:
     return InjectionConfig(
         base_url=base_url, points=points, classes=classes,
         authorization=data.get("authorization", ""), token_env=data.get("token_env", ""),
+        cookies=dict(data.get("cookies") or {}), headers=dict(data.get("headers") or {}),
     )
 
 

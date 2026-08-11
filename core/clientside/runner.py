@@ -117,6 +117,15 @@ def run_clientside(
     client = (client_factory or (lambda h: _client_for(config.base_url)))(
         [host] if host else [])
 
+    # Shared authenticated session: attach the logged-in identity's headers +
+    # cookies (or explicit config cookies/headers) to every probe, so client-side
+    # misconfig checks run against the post-login surface too.
+    from core.session.attach import merged_auth_headers
+
+    def auth_for(url: str) -> Dict[str, str]:
+        return merged_auth_headers(url, session=config.session,
+                                   cookies=config.cookies, headers=config.headers)
+
     vulns: List[Dict[str, Any]] = []
     n = [0]
 
@@ -136,7 +145,7 @@ def run_clientside(
     # --- base page: CSP / clickjacking / cookies ---
     try:
         run.requests_sent += 1
-        resp = _fetch(client, "GET", config.base_url)
+        resp = _fetch(client, "GET", config.base_url, headers=auth_for(config.base_url) or None)
         headers = dict(resp.headers)
         csp = headers.get("content-security-policy")
         directives = analyzers.parse_csp(csp or "")
@@ -155,7 +164,7 @@ def run_clientside(
     try:
         run.requests_sent += 1
         origin = f"https://{MARKER_HOST}"
-        resp = _fetch(client, "GET", config.base_url, headers={"Origin": origin})
+        resp = _fetch(client, "GET", config.base_url, headers={**auth_for(config.base_url), "Origin": origin})
         for f in analyzers.cors_analysis(origin, dict(resp.headers)):
             record(f["type"], base_eid, f)
     except Exception as exc:
@@ -167,7 +176,8 @@ def run_clientside(
             url = _with_query(f"{config.base_url}{path}", param, f"//{MARKER_HOST}/")
             try:
                 run.requests_sent += 1
-                resp = _fetch(client, "GET", url, follow_redirects=False)
+                resp = _fetch(client, "GET", url, headers=auth_for(url) or None,
+                              follow_redirects=False)
                 loc = dict(resp.headers).get("location", "")
                 f = analyzers.open_redirect(loc, resp.url, MARKER_HOST)
                 if f:

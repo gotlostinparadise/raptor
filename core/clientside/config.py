@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List, Mapping
+from typing import Any, Dict, List, Mapping
 
 _DEFAULT_REDIRECT_PARAMS = [
     "url", "redirect", "redirect_uri", "next", "return", "returnUrl",
@@ -20,6 +20,10 @@ class ClientSideConfig:
     paths: List[str] = field(default_factory=lambda: ["/"])
     redirect_params: List[str] = field(default_factory=lambda: list(_DEFAULT_REDIRECT_PARAMS))
     token_env: str = ""
+    # Shared authenticated session (see core.session.attach).
+    cookies: Dict[str, str] = field(default_factory=dict)
+    headers: Dict[str, str] = field(default_factory=dict)
+    session: Any = field(default=None, repr=False, compare=False)
 
 
 def from_dict(data: Mapping[str, Any]) -> ClientSideConfig:
@@ -31,6 +35,7 @@ def from_dict(data: Mapping[str, Any]) -> ClientSideConfig:
         paths=list(data.get("paths") or ["/"]),
         redirect_params=list(data.get("redirect_params") or _DEFAULT_REDIRECT_PARAMS),
         token_env=data.get("token_env", ""),
+        cookies=dict(data.get("cookies") or {}), headers=dict(data.get("headers") or {}),
     )
 
 

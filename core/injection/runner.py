@@ -25,9 +25,7 @@ from core.payloads.feedback import record_confirmed as _fb_record
 from core.injection.config import BLIND_CLASSES, InjectionConfig, InjectionPoint
 from core.injection.markers import MarkerFactory
 from core.oast.outcome import vuln_record as _oast_vuln
-from core.session.engine import SessionEngine
-from core.session.identity import Identity
-from core.session.login import BearerAuth, resolve_credential
+from core.session.attach import engine_for
 from core.webgraph import model as M
 from core.webgraph.builder import build_graph
 from core.webgraph.orchestrator import persist_records, serialize_graph
@@ -72,18 +70,18 @@ def _with_query(url: str, param: str, value: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(q), parts.fragment))
 
 
-def _send(engine: SessionEngine, base_url: str, point: InjectionPoint, payload: str):
+def _send(engine, identity: str, base_url: str, point: InjectionPoint, payload: str):
     method = point.method.upper()
     if point.location == "query":
         url = _with_query(f"{base_url}{point.path}", point.param, payload)
-        return engine.request(_TESTER, method, url)
+        return engine.request(identity, method, url)
     if point.content_type == "json":
         body = json.dumps({point.param: payload}).encode("utf-8")
         ct = "application/json"
     else:
         body = urlencode({point.param: payload}).encode("utf-8")
         ct = "application/x-www-form-urlencoded"
-    return engine.request(_TESTER, method, f"{base_url}{point.path}", body=body,
+    return engine.request(identity, method, f"{base_url}{point.path}", body=body,
                           headers={"Content-Type": ct})
 
 
@@ -93,8 +91,9 @@ def _body_text(resp) -> str:
 
 
 class InjectionRunner:
-    def __init__(self, engine: SessionEngine, *, oast=None, llm_model=None) -> None:
+    def __init__(self, engine, *, identity: str = _TESTER, oast=None, llm_model=None) -> None:
         self.engine = engine
+        self.identity_name = identity   # session identity to inject as
         self.oast = oast
         self.llm_model = llm_model   # enables the LLM proposer (None = mechanical)
         self._markers = MarkerFactory()
@@ -129,7 +128,7 @@ class InjectionRunner:
 
         def send(pl):
             run.requests_sent += 1
-            return _send(eng, base, point, pl)
+            return _send(eng, self.identity_name, base, point, pl)
 
         if "ssti" in classes:
             for pl, expected in payloads.ssti(self._markers.next()):
@@ -219,7 +218,7 @@ class InjectionRunner:
             planted[c.finding_id] = {"class": vuln_class, "endpoint_id": eid,
                                      "param": point.param}
             run.requests_sent += 1
-            _send(eng, base, point, build(c.host))
+            _send(eng, self.identity_name, base, point, build(c.host))
 
         if "ssrf" in classes:
             plant("ssrf", lambda h: f"http://{h}/")
@@ -267,24 +266,19 @@ def run_injection(
         _finalize(out, run, {})
         return run
 
-    # build a session engine with a single tester identity
-    from urllib.parse import urlsplit as _us
-    host = _us(config.base_url).hostname or ""
-    if client_factory is not None:
-        client = client_factory([host] if host else [])
-    else:
-        client = _client_for(config.base_url)
-    engine = SessionEngine(client)
-    ident = Identity(name=_TESTER)
-    engine.add_identity(ident)
-    if config.token_env:
-        tok = resolve_credential(config.token_env, env)
-        if tok:
-            engine.authenticate(_TESTER, BearerAuth(tok))
-        else:
-            run.warnings.append(f"missing ${config.token_env}; testing unauthenticated")
+    # Resolve the session to inject as: a live engine threaded in by the
+    # orchestrator (cookie jar + bearer at once) is reused; otherwise a fresh
+    # engine is built and its tester identity seeded from token_env / cookies /
+    # headers. This is what carries a login-established cookie session onto every
+    # injection request (not just a bearer string).
+    engine, ident_name, warns = engine_for(
+        config.base_url, session=config.session, cookies=config.cookies,
+        headers=config.headers, token_env=config.token_env, env=env,
+        client_factory=client_factory, identity_name=_TESTER)
+    run.warnings.extend(warns)
+    ident = engine.identity(ident_name)
 
-    runner = InjectionRunner(engine, oast=oast, llm_model=llm_model)
+    runner = InjectionRunner(engine, identity=ident_name, oast=oast, llm_model=llm_model)
     vulns: List[Dict[str, Any]] = []
     planted: Dict[str, Dict[str, str]] = {}
     for point in config.points:
@@ -333,11 +327,6 @@ def run_injection(
     if vulns:
         record_confirmed(vulns, project_dir=out, producing_model=producing_model)
     return run
-
-
-def _client_for(base_url: str) -> Any:
-    from core.webhttp import pentest_client
-    return pentest_client(base_url)
 
 
 def _finalize(out: Path, run: InjectionRun, accumulated) -> None:

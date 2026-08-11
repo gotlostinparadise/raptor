@@ -23,16 +23,13 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
-from urllib.parse import urlsplit
 
 from core.graphql import checks
 from core.graphql.config import GraphQLConfig
 from core.graphql.introspection import (
     INTROSPECTION_QUERY, operations, post_graphql, schema_from_response,
 )
-from core.session.engine import SessionEngine
-from core.session.identity import Identity
-from core.session.login import BearerAuth, resolve_credential
+from core.session.attach import engine_for
 from core.webgraph import model as M
 from core.webgraph.builder import build_graph
 from core.webgraph.orchestrator import persist_records, serialize_graph
@@ -62,11 +59,6 @@ class GraphQLRun:
             "warnings": self.warnings, "node_count": self.node_count,
             "edge_count": self.edge_count,
         }
-
-
-def _client_for(base_url: str) -> Any:
-    from core.webhttp import pentest_client
-    return pentest_client(base_url)
 
 
 def run_graphql(
@@ -103,22 +95,18 @@ def run_graphql(
         _finalize(out, run, recs)
         return run
 
-    # build a session engine (normalises non-2xx, carries an optional token)
-    host = urlsplit(config.base_url).hostname or ""
-    client = (client_factory or (lambda h: _client_for(config.base_url)))(
-        [host] if host else [])
-    engine = SessionEngine(client)
-    engine.add_identity(Identity(name=_TESTER))
-    if config.token_env:
-        tok = resolve_credential(config.token_env, env)
-        if tok:
-            engine.authenticate(_TESTER, BearerAuth(tok))
-        else:
-            run.warnings.append(f"missing ${config.token_env}; unauthenticated")
+    # Reuse the orchestrator's logged-in engine (cookie jar + bearer) when
+    # threaded in, else build a fresh one seeded from token_env / cookies /
+    # headers. The engine normalises non-2xx and carries the session.
+    engine, ident_name, warns = engine_for(
+        config.base_url, session=config.session, cookies=config.cookies,
+        headers=config.headers, token_env=config.token_env, env=env,
+        client_factory=client_factory, identity_name=_TESTER)
+    run.warnings.extend(warns)
 
     # --- introspection ---
     try:
-        resp = post_graphql(engine, config.url, INTROSPECTION_QUERY)
+        resp = post_graphql(engine, config.url, INTROSPECTION_QUERY, identity=ident_name)
         schema = schema_from_response(resp)
     except Exception as exc:
         run.warnings.append(f"introspection failed: {type(exc).__name__}: {exc}")
@@ -149,7 +137,8 @@ def run_graphql(
         if field_name:
             n = config.dos_aliases
             try:
-                r = post_graphql(engine, config.url, checks.alias_query(field_name, n))
+                r = post_graphql(engine, config.url, checks.alias_query(field_name, n),
+                                 identity=ident_name)
                 if checks.batching_accepted(r, n):
                     vulns.append(M.VulnRecord(
                         id="GQL-BATCHING", vuln_class="graphql_batching_dos",
