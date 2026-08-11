@@ -24,7 +24,9 @@ from core.browser import harness as _harness
 from core.browser.auth import context_args_for_identity, resolve_identity
 from core.browser.capture import records_from_capture
 from core.webgraph.model import IdentityRecord
-from core.webgraph.scope import canonical_origin, canonical_url, in_scope
+from core.webgraph.scope import (
+    canonical_origin, canonical_url, fragment_route, in_scope,
+)
 from core.webgraph.source import RunContext, Source, SourceResult, Surface, register
 
 
@@ -35,6 +37,18 @@ def _hosts_of(origins: Sequence[str]) -> List[str]:
         if host and host not in out:
             out.append(host)
     return out
+
+
+def _visit_key(url: str) -> str:
+    """Dedup key that keeps SPA hash-routes distinct.
+
+    ``canonical_url`` folds the fragment away, so ``/#/search`` and ``/#/about``
+    would collapse onto the base page and never be crawled. Appending the route
+    keeps them separate (``…#/search`` ≠ ``…#/about`` ≠ base) so each renders.
+    """
+    base = canonical_url(url) or url
+    fr = fragment_route(url)
+    return f"{base}#{fr[0]}" if fr is not None else base
 
 
 @register
@@ -100,7 +114,10 @@ class BrowserCrawlSource(Source):
             ))
 
         visited: Set[str] = set()
-        queue: deque = deque((canonical_url(o) or o, 0) for o in origins)
+        # Preserve a seed's fragment route (if any); otherwise canonicalise.
+        queue: deque = deque(
+            ((o if fragment_route(o) is not None else (canonical_url(o) or o)), 0)
+            for o in origins)
 
         try:
             with _harness.BrowserHarness(
@@ -109,9 +126,10 @@ class BrowserCrawlSource(Source):
             ) as h:
                 while queue and len(visited) < max_pages:
                     url, depth = queue.popleft()
-                    if not url or url in visited:
+                    key = _visit_key(url)
+                    if not url or key in visited:
                         continue
-                    visited.add(url)
+                    visited.add(key)
                     session = h.new_session(**session_args)
                     try:
                         session.navigate(url)
@@ -125,14 +143,19 @@ class BrowserCrawlSource(Source):
                     for kind, rows in records_from_capture(cap, source=self.name).items():
                         for row in rows:
                             result.add((kind, row))
-                    result.discovered.urls.add(url)
+                    result.discovered.urls.add(key)
 
                     if depth < max_depth:
                         for link in cap.links:
-                            cu = canonical_url(link)
-                            if cu and cu not in visited and in_scope(link, origins):
-                                queue.append((cu, depth + 1))
-                                result.discovered.urls.add(cu)
+                            if not in_scope(link, origins):
+                                continue
+                            # Keep the fragment for a hash-route link so the SPA
+                            # route renders; canonicalise a plain link.
+                            nav = (link if fragment_route(link) is not None
+                                   else canonical_url(link))
+                            if nav and _visit_key(nav) not in visited:
+                                queue.append((nav, depth + 1))
+                                result.discovered.urls.add(_visit_key(nav))
         except _harness.BrowserUnavailable as exc:
             result.error = str(exc)
         return result

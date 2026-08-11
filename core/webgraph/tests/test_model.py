@@ -43,7 +43,8 @@ def test_request_record_carries_evidence_fields():
 def test_param_locations_enumerated():
     assert M.LOC_QUERY in M.PARAM_LOCATIONS
     assert set(M.PARAM_LOCATIONS) == {
-        M.LOC_QUERY, M.LOC_PATH, M.LOC_BODY, M.LOC_HEADER, M.LOC_COOKIE
+        M.LOC_QUERY, M.LOC_PATH, M.LOC_BODY, M.LOC_HEADER, M.LOC_COOKIE,
+        M.LOC_FRAGMENT,
     }
 
 

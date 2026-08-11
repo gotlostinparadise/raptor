@@ -12,6 +12,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 # The vuln classes the runner knows how to test.
 ALL_CLASSES = (
@@ -73,7 +74,31 @@ def load_config(path: Path) -> InjectionConfig:
     return from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
 
 
-def points_from_webgraph(normalized_dir: Path, *, locations=("query", "body")) -> List[InjectionPoint]:
+def build_target_url(base_url: str, point: "InjectionPoint", value: str) -> str:
+    """URL with ``value`` injected at ``point.param``, honouring its location.
+
+    ``query`` splices into the real query string (preserving other params);
+    ``fragment`` splices into an SPA hash-route's fragment query
+    (``/#/route?param=value``) — where a client-side router, not the server,
+    reads it. Not for ``body`` points (those aren't URLs; the runner builds a
+    request body instead).
+    """
+    if point.location == "fragment":
+        from core.webgraph.scope import spa_route_of_path
+        route = spa_route_of_path(point.path) or point.path
+        if not route.startswith("/"):
+            route = "/" + route
+        return f"{base_url}/#{route}?{urlencode([(point.param, value)])}"
+    parts = urlsplit(f"{base_url}{point.path}")
+    kept = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+            if k != point.param]
+    kept.append((point.param, value))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path,
+                       urlencode(kept), parts.fragment))
+
+
+def points_from_webgraph(normalized_dir: Path, *,
+                         locations=("query", "body", "fragment")) -> List[InjectionPoint]:
     """Harvest injection points from a `/webgraph` run's normalized records.
 
     Joins ``parameters.jsonl`` (name + location + endpoint_id) with
@@ -114,5 +139,5 @@ def points_from_webgraph(normalized_dir: Path, *, locations=("query", "body")) -
 
 __all__ = [
     "ALL_CLASSES", "BLIND_CLASSES", "InjectionPoint", "InjectionConfig",
-    "from_dict", "load_config", "points_from_webgraph",
+    "from_dict", "load_config", "points_from_webgraph", "build_target_url",
 ]

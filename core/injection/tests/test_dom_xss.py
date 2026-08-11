@@ -40,13 +40,24 @@ class _StubHarness:
     def __init__(self, vulnerable):
         self.vulnerable = vulnerable
         self.last_headers = None
+        self.navigated = []
 
     def new_session(self, extra_http_headers=None):
         self.last_headers = extra_http_headers
-        return _StubSession(self.vulnerable, extra_http_headers)
+        session = _StubSession(self.vulnerable, extra_http_headers)
+        _orig = session.navigate
+
+        def _rec(url):
+            self.navigated.append(url)
+            _orig(url)
+
+        session.navigate = _rec
+        return session
 
 
 _POINTS = [InjectionPoint(method="GET", path="/search", param="q", location="query")]
+_FRAG_POINTS = [InjectionPoint(method="GET", path="/#/search", param="q",
+                              location="fragment")]
 
 
 def test_confirm_dom_xss_detects_execution():
@@ -61,6 +72,20 @@ def test_confirm_dom_xss_no_execution_no_finding():
 def test_confirm_dom_xss_skips_body_points():
     body_pt = [InjectionPoint(method="POST", path="/x", param="b", location="body")]
     assert confirm_dom_xss(_StubHarness(vulnerable=True), "https://app.test", body_pt) == []
+
+
+def test_confirm_dom_xss_drives_spa_hash_route():
+    # the SPA/DOM-XSS case: a fragment (hash-route) param must be driven, and
+    # the browser must navigate the fragment URL — not a REST path.
+    h = _StubHarness(vulnerable=True)
+    hits = confirm_dom_xss(h, "https://app.test", _FRAG_POINTS)
+    assert len(hits) == 1 and hits[0]["context"] == "dom-executed"
+    assert any("/#/search?q=" in u for u in h.navigated)   # fragment, not query
+
+
+def test_confirm_dom_xss_no_execution_on_hash_route():
+    assert confirm_dom_xss(_StubHarness(vulnerable=False), "https://app.test",
+                           _FRAG_POINTS) == []
 
 
 def test_confirm_dom_xss_seeds_auth_headers():

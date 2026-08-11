@@ -11,8 +11,8 @@ same way :mod:`core.recon.scope` is shared across recon.
 from __future__ import annotations
 
 import re
-from typing import Optional, Sequence, Tuple
-from urllib.parse import urlsplit, urlunsplit
+from typing import List, Optional, Sequence, Tuple
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 # A path segment that is really an object identifier, not a route label. Numeric
 # ids, UUIDs, long hex/base -like blobs. Mirrors ``core.apitest.inventory``'s
@@ -81,6 +81,58 @@ def split_url(url: str) -> Tuple[str, str]:
     parts = urlsplit(url.strip())
     origin = canonical_origin(url)
     return origin, (parts.path or "/")
+
+
+# ─────────────────────────── SPA hash-routes ───────────────────────────
+#
+# A single-page app routes client-side off the URL *fragment* (``/#/search``),
+# so the route — and any query it carries (``/#/search?q=x``) — never reaches the
+# server and is invisible to the query/path canonicalisers above (which drop the
+# fragment on purpose). These helpers model a hash-route as its own endpoint so
+# the DOM-aware oracle can target it, without disturbing the server-side view.
+
+_SPA_MARK = "/#"
+
+
+def fragment_route(url: str) -> Optional[Tuple[str, List[Tuple[str, str]]]]:
+    """Parse an SPA hash-route from ``url``'s fragment.
+
+    ``"http://h/#/search?q=x"`` → ``("/search", [("q", "x")])``. Returns ``None``
+    when the fragment is absent or a plain in-page anchor (``#section`` — no
+    leading ``/``), neither of which is a route.
+    """
+    frag = urlsplit(url.strip()).fragment
+    if not frag or not frag.startswith("/"):
+        return None
+    route, _, query = frag.partition("?")
+    params = parse_qsl(query, keep_blank_values=True) if query else []
+    return (route or "/"), params
+
+
+def spa_endpoint_path(route: str) -> str:
+    """Endpoint path for a hash-route: ``"/search"`` → ``"/#/search"``.
+
+    The ``/#`` prefix marks the path as fragment-routed so
+    :func:`is_spa_path` / :func:`spa_route_of_path` can recover it and the URL
+    builder knows to splice params into the fragment, not the real query string.
+    """
+    r = route if route.startswith("/") else "/" + route
+    return _SPA_MARK + r
+
+
+def is_spa_path(path: str) -> bool:
+    """True when ``path`` is a hash-route endpoint path (``/#/…``)."""
+    return path.startswith(_SPA_MARK)
+
+
+def spa_route_of_path(path: str) -> Optional[str]:
+    """Inverse of :func:`spa_endpoint_path`: ``"/#/search"`` → ``"/search"``.
+
+    Returns ``None`` for a non-SPA path so callers can branch on it.
+    """
+    if not is_spa_path(path):
+        return None
+    return path[len(_SPA_MARK):] or "/"
 
 
 def in_scope(url: str, origins: Sequence[str]) -> bool:

@@ -19,7 +19,10 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qsl, urlsplit
 
 from core.webgraph import model as M
-from core.webgraph.scope import canonical_origin, canonical_url, endpoint_id, split_url
+from core.webgraph.scope import (
+    canonical_origin, canonical_url, endpoint_id, fragment_route,
+    spa_endpoint_path, split_url,
+)
 
 # Playwright resource types that represent an application endpoint call (as
 # opposed to a static asset like an image or stylesheet).
@@ -109,6 +112,33 @@ def records_from_capture(cap: PageCapture, *, source: str = "browser_crawl") -> 
     for form in cap.forms:
         add(M.FormRecord(page_url=page_url, action=form.action,
                          method=form.method, fields=form.fields, source=source))
+
+    # SPA hash-routes: the rendered URL and any in-app links may carry a
+    # client-side route with its own query string (``/#/search?q=…``). The
+    # server never sees it (everything after ``#`` is client-side), so it
+    # surfaces only here — model it as a ``fragment``-located endpoint so the
+    # DOM-aware oracle can target Angular/Vue/React hash-routes.
+    seen_spa: set = set()
+    for spa_url in [cap.final_url or cap.url, *cap.links]:
+        parsed = fragment_route(spa_url or "")
+        if not parsed:
+            continue
+        route, params = parsed
+        spa_origin = canonical_origin(spa_url) or origin
+        spa_path = spa_endpoint_path(route)
+        eid = endpoint_id("GET", spa_path)
+        if eid not in seen_spa:
+            seen_spa.add(eid)
+            add(M.EndpointRecord(method="GET", path=spa_path,
+                                 origin=spa_origin or origin, url=spa_url,
+                                 source=source))
+        for name, _value in params:
+            key = (eid, name)
+            if key in seen_spa:
+                continue
+            seen_spa.add(key)
+            add(M.ParamRecord(endpoint_id=eid, name=name,
+                              location=M.LOC_FRAGMENT, source=source))
 
     return out
 

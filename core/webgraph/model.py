@@ -66,7 +66,13 @@ LOC_PATH = "path"
 LOC_BODY = "body"
 LOC_HEADER = "header"
 LOC_COOKIE = "cookie"
-PARAM_LOCATIONS = (LOC_QUERY, LOC_PATH, LOC_BODY, LOC_HEADER, LOC_COOKIE)
+# A parameter carried in the query string of a URL *fragment* — the hallmark of
+# an SPA hash-route (``/#/search?q=…``). It never reaches the server as a real
+# query param (everything after ``#`` is client-side), so only a DOM-aware
+# oracle can test it; modelling it as its own location is what lets the injection
+# harvester and the DOM-XSS oracle target Angular/Vue/React hash-routes.
+LOC_FRAGMENT = "fragment"
+PARAM_LOCATIONS = (LOC_QUERY, LOC_PATH, LOC_BODY, LOC_HEADER, LOC_COOKIE, LOC_FRAGMENT)
 
 # Finding status — mirrors the api-findings / VerifiedOutcome vocabulary. The
 # LLM proposes; a tool/oracle promotes ``suspected`` -> ``confirmed``.

@@ -271,6 +271,11 @@ def run_injection(
     vulns: List[Dict[str, Any]] = []
     planted: Dict[str, Dict[str, str]] = {}
     for point in config.points:
+        # A fragment (SPA hash-route) param is client-side only — it never
+        # reaches the server, so no HTTP in-band/blind oracle can see it. It is
+        # tested exclusively by the DOM-XSS oracle below.
+        if point.location == "fragment":
+            continue
         try:
             runner._inband(run, point, classes, vulns)
             planted.update(runner._blind(run, point, classes))

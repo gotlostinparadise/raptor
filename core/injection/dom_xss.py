@@ -17,17 +17,9 @@ is unit-testable with a stub and works with the real
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Sequence
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from core.injection.config import build_target_url
 from core.injection.markers import MarkerFactory
-
-
-def _url_with(base_url: str, point, value: str) -> str:
-    parts = urlsplit(f"{base_url}{point.path}")
-    q = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
-         if k != point.param]
-    q.append((point.param, value))
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(q), parts.fragment))
 
 
 def confirm_dom_xss(
@@ -45,8 +37,10 @@ def confirm_dom_xss(
     sets a unique ``window.__raptor_xss`` sentinel), proposer-ordered — so it
     tries not just ``img/onerror`` but the ``<iframe src="javascript:…">``
     sanitiser-bypass that catches Angular DOM-XSS. A match proves execution, not
-    reflection. Only ``query`` points are driven (GET navigation); ``session_headers``
-    seed an authenticated context.
+    reflection. ``query`` points (real query string) and ``fragment`` points (SPA
+    hash-routes like ``/#/search?q=…``) are both driven by GET navigation — the
+    fragment case is where SPA/DOM XSS actually lives; ``session_headers`` seed an
+    authenticated context.
     """
     from core.payloads import default_store, propose
     markers = markers or MarkerFactory(salt="domxss")
@@ -54,7 +48,7 @@ def confirm_dom_xss(
                if "dom" in e.tags]
     findings: List[Dict[str, Any]] = []
     for point in points:
-        if getattr(point, "location", "query") != "query":
+        if getattr(point, "location", "query") not in ("query", "fragment"):
             continue
         confirmed = False
         for entry in vectors:
@@ -62,7 +56,7 @@ def confirm_dom_xss(
                 break
             tok = markers.next().token
             payload = entry.render(tok=tok)     # sets window.__raptor_xss='tok'
-            url = _url_with(base_url, point, payload)
+            url = build_target_url(base_url, point, payload)
             session = (harness.new_session(extra_http_headers=session_headers)
                        if session_headers else harness.new_session())
             fired = None
