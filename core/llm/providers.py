@@ -10,6 +10,7 @@ JSON-in-prompt fallback for providers that lack native structured support.
 
 import json
 import os
+import random
 import re
 import threading
 import time
@@ -506,13 +507,16 @@ class LLMProvider(ABC):
         Usage is tracked by self.generate() — no double counting.
         """
         schema_json = json.dumps(schema, indent=2)
-        augmented_prompt = (
-            f"{prompt}\n\n"
+        schema_block = (
+            f"\n\n## Output format\n"
             f"Respond with JSON matching this schema:\n"
             f"```json\n{schema_json}\n```\n"
             f"Return ONLY valid JSON, no other text."
         )
-        response = self.generate(augmented_prompt, system_prompt)
+        augmented_system = (
+            (system_prompt or "") + schema_block
+        )
+        response = self.generate(prompt, augmented_system)
         if response.finish_reason in ("max_tokens", "length"):
             raise json.JSONDecodeError(
                 "Response truncated (output token limit reached)",
@@ -1508,6 +1512,8 @@ class OpenAICompatibleProvider(LLMProvider):
                         system=system, max_tokens=max_tokens,
                         cache_control=cache_control,
                     )
+                if is_credit_exhausted(exc):
+                    raise  # let callers fail fast
                 if _is_rate_limit(exc):
                     from core.llm.throttle import broadcast_rate_limit
                     broadcast_rate_limit()
@@ -1527,7 +1533,7 @@ class OpenAICompatibleProvider(LLMProvider):
                         output_tokens=0,
                         error_message=err_msg,
                     )
-                delay = backoff_factor ** attempt
+                delay = (backoff_factor ** attempt) * (0.5 + random.random())
                 logger.info(
                     f"OpenAICompatibleProvider.turn: transient error attempt "
                     f"{attempt + 1}, retrying in {delay:.1f}s: {exc}"
@@ -1702,6 +1708,8 @@ class OpenAICompatibleProvider(LLMProvider):
                         cache_control=cache_control,
                     )
                     return
+                if is_credit_exhausted(exc):
+                    raise  # let callers fail fast
                 if _is_rate_limit(exc):
                     from core.llm.throttle import broadcast_rate_limit
                     broadcast_rate_limit()
@@ -2364,6 +2372,8 @@ class AnthropicProvider(LLMProvider):
                 resp = create_fn(**send_kwargs)
                 break
             except (APIConnectionError, APIStatusError, APIError) as exc:
+                if is_credit_exhausted(exc):
+                    raise  # let callers fail fast
                 if _is_rate_limit(exc):
                     from core.llm.throttle import broadcast_rate_limit
                     broadcast_rate_limit()
@@ -2381,7 +2391,7 @@ class AnthropicProvider(LLMProvider):
                         output_tokens=0,
                         error_message=err_msg,
                     )
-                delay = backoff_factor ** attempt
+                delay = (backoff_factor ** attempt) * (0.5 + random.random())
                 logger.info(
                     f"AnthropicProvider.turn: transient error attempt "
                     f"{attempt + 1}, retrying in {delay:.1f}s: {exc}"
@@ -2756,6 +2766,7 @@ def is_credit_exhausted(exc: BaseException) -> bool:
         "billing hard limit",
         "account has been deactivated",
         "billing not active",
+        "reached your specified api usage limits",
     ))
 
 
