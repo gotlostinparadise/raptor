@@ -15,32 +15,14 @@ default fetch pulls a raw payload list over the egress-allowlisted HttpClient.
 
 from __future__ import annotations
 
-import re
 from typing import Callable, List, Optional
 
 from core.payloads.entry import CTX_ANY, ORACLE_UNESCAPED, PayloadEntry
+from core.payloads.loaders import adapt_xss as _adapt
 
 # A raw payload list in the repo (protocol-relative externals / one payload per line).
 _DEFAULT_URL = ("https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/"
                 "master/XSS%20Injection/Intruders/xss_alert.txt")
-
-_SENTINEL = "window.__raptor_xss='{tok}'"
-
-# Reject anything that could change state / destroy data (never sent).
-_DESTRUCTIVE = re.compile(
-    r"(?i)\b(rm\s+-rf|drop\s+table|delete\s+from|shutdown|format\s+|mkfs|"
-    r"truncate|;\s*reboot|dd\s+if=)")
-
-_SINK = re.compile(r"(?i)(alert|prompt|confirm|console\.log)\s*\([^)]*\)")
-
-
-def _adapt(raw: str) -> Optional[str]:
-    """Rewrite a raw XSS payload to set the sentinel, or None if unverifiable."""
-    if not raw or len(raw) > 300 or _DESTRUCTIVE.search(raw):
-        return None
-    if not _SINK.search(raw):
-        return None                       # no exec sink → can't confirm → drop
-    return _SINK.sub(_SENTINEL, raw)
 
 
 def _default_fetch() -> str:
