@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
 
 from core.injection import oracles, payloads
+from core.payloads.feedback import record_confirmed as _fb_record
 from core.injection.config import BLIND_CLASSES, InjectionConfig, InjectionPoint
 from core.injection.markers import MarkerFactory
 from core.oast.outcome import vuln_record as _oast_vuln
@@ -33,6 +35,11 @@ from core.webgraph.scope import endpoint_id as _eid
 from core.webgraph.verified import record_confirmed
 
 _TESTER = "tester"
+
+
+def _now() -> str:
+    """UTC ISO-8601 timestamp for the payload-feedback flywheel."""
+    return datetime.now(timezone.utc).isoformat()
 
 
 @dataclass
@@ -107,6 +114,15 @@ class InjectionRunner:
         ).to_row())
         run.findings.append({"id": vid, "class": vuln_class, "point": point.label,
                              "proof": proof_kind})
+        # Flywheel: remember every confirmed vector for cross-run learning. XSS
+        # records its exact catalog id in the xss branch (proposer-relevant); the
+        # generator-based classes have no catalog id yet, so log a builtin marker
+        # (harmless to the proposer, useful to SAGE / the knowledge log).
+        if vuln_class != "xss":
+            technique = str(evidence.get("method") or evidence.get("technique")
+                            or proof_kind)
+            _fb_record(f"builtin:{vuln_class}", vuln_class, technique=technique,
+                       target=run.base_url, timestamp=_now())
 
     def _inband(self, run, point, classes, vulns):
         eng, base = self.engine, run.base_url
@@ -167,7 +183,8 @@ class InjectionRunner:
             # 2. LLM proposes an ordering of context-appropriate catalog vectors
             #    (mechanical fallback when no model); the oracle still confirms.
             entries = propose(default_store(), "xss", context_hints=contexts,
-                              response_excerpt=_body_text(send(tok)), model=self.llm_model)
+                              response_excerpt=_body_text(send(tok)), model=self.llm_model,
+                              target=run.base_url)
             for e in entries:
                 rendered = e.render(tok=tok)
                 if oracles.xss_reflected(send(rendered), e.expected(tok=tok)):
@@ -175,7 +192,7 @@ class InjectionRunner:
                                   {"payload": rendered, "entry": e.id,
                                    "context": ",".join(contexts) or e.context}, vulns)
                     record_confirmed(e.id, "xss", technique=e.technique,
-                                     target=run.base_url)
+                                     target=run.base_url, timestamp=_now())
                     break
         if "ssrf_metadata" in classes:
             for pl in payloads.ssrf_metadata():
@@ -293,6 +310,10 @@ def run_injection(
                 point = hit["point"]
                 runner._finding(run, point, "xss", "A03", M.PROOF_STATE_ORACLE,
                                 {"payload": hit["payload"], "context": "dom-executed"}, vulns)
+                # feed the flywheel the exact DOM vector that executed
+                _fb_record(hit.get("entry", "builtin:xss-dom"), "xss",
+                           technique="dom-executed", target=config.base_url,
+                           timestamp=_now())
         except Exception as exc:
             run.warnings.append(f"dom-xss pass failed: {type(exc).__name__}: {exc}")
 

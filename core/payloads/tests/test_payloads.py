@@ -59,11 +59,38 @@ def test_store_add_enriches_by_id():
 
 # ─────────────────────────── proposer (mechanical fallback) ───────────────────────────
 
-def test_propose_mechanical_when_no_model():
+def test_propose_mechanical_when_no_model(tmp_path):
     s = default_store()
-    ents = propose(s, "xss", context_hints=[CTX_HTML_BODY], model=None)
+    # isolate the flywheel log so the test pins pure mechanical ordering
+    fb = str(tmp_path / "empty.jsonl")
+    ents = propose(s, "xss", context_hints=[CTX_HTML_BODY], model=None, feedback=fb)
     # deterministic mechanical order = store.select order
     assert [e.id for e in ents] == [e.id for e in s.select("xss", contexts=[CTX_HTML_BODY])]
+
+
+# ─────────────────────────── proposer (flywheel) ───────────────────────────
+
+def test_flywheel_promotes_confirmed_payload(tmp_path):
+    fb = str(tmp_path / "fb.jsonl")
+    s = default_store()
+    base = [e.id for e in s.select("xss")]
+    promote = base[-1]                       # a vector NOT already first
+    record_confirmed(promote, "xss", path=fb)
+    ents = propose(s, "xss", model=None, feedback=fb)
+    assert ents[0].id == promote             # confirmed vector floated to front
+    assert {e.id for e in ents} == set(base)  # coverage preserved
+
+
+def test_flywheel_is_target_scoped(tmp_path):
+    fb = str(tmp_path / "fb.jsonl")
+    s = default_store()
+    base = [e.id for e in s.select("xss")]
+    promote = base[-1]
+    record_confirmed(promote, "xss", target="https://a.test", path=fb)
+    # a different target sees no boost; the matching target does
+    other = propose(s, "xss", model=None, target="https://b.test", feedback=fb)
+    match = propose(s, "xss", model=None, target="https://a.test", feedback=fb)
+    assert other[0].id == base[0] and match[0].id == promote
 
 
 def test_propose_preserves_coverage_on_llm_failure(monkeypatch):
