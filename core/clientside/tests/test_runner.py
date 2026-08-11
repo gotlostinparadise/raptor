@@ -71,3 +71,18 @@ def test_hardened_server_is_clean(tmp_path):
     run = run_clientside(_cfg(), out_dir=tmp_path, active=True,
                          client_factory=_hardened_server())
     assert run.findings == []
+
+
+def test_absence_findings_stay_out_of_verified_pool(tmp_path):
+    # Q2 soundness: the vulnerable server yields 5 finding classes, but only the
+    # two reflected/behavioural proofs (CORS origin reflection, open redirect)
+    # are tool-produced proofs. CSP/clickjacking/cookie absence are header
+    # observations — reported, but NOT reflected_marker-confirmed into the pool.
+    run = run_clientside(_cfg(), out_dir=tmp_path, active=True,
+                         client_factory=_vulnerable_server(), producing_model="t")
+    classes = {f["class"] for f in run.findings}
+    assert {"csp_missing", "clickjacking", "cookie_flags"} <= classes   # still reported
+    web = [o for o in collect_outcomes(tmp_path, project_root=tmp_path)
+           if o.oracle == Oracle.WEB]
+    assert len(web) == 2                                # only reflection + redirect
+    assert {o.cwe_id for o in web} == {"CWE-942", "CWE-601"}

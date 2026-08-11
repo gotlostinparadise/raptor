@@ -36,6 +36,15 @@ _OWASP = {
     "open_redirect": "API8",
 }
 
+# Only findings where we sent a marker/probe and observed a reflected or
+# behavioural response are a tool-produced PROOF (reflected_marker): the server
+# echoed our attacker Origin, or followed our redirect to the attacker host.
+# Everything else here — missing/weak CSP, framable page, insecure cookie flags,
+# CORS wildcard/null — is a header OBSERVATION read straight off the wire: a real
+# weakness, but not an exploit proof, so it stays `suspected` and out of the
+# verified pool (see core/webgraph/verified.py: record_confirmed skips it).
+_REFLECTION_PROVEN = frozenset({"cors_origin_reflection", "open_redirect"})
+
 
 @dataclass
 class ClientSideRun:
@@ -131,11 +140,14 @@ def run_clientside(
 
     def record(vuln_type, endpoint, finding):
         n[0] += 1
+        proven = vuln_type in _REFLECTION_PROVEN
+        status = M.STATUS_CONFIRMED if proven else M.STATUS_SUSPECTED
+        proof = M.PROOF_REFLECTED_MARKER if proven else M.PROOF_NONE
         vulns.append(M.VulnRecord(
             id=f"CS-{n[0]:04d}", vuln_class=vuln_type, endpoint_id=endpoint,
             severity=finding.get("severity", "low"),
-            owasp=_OWASP.get(vuln_type, "API8"), status=M.STATUS_CONFIRMED,
-            proof_kind=M.PROOF_REFLECTED_MARKER, evidence=finding,
+            owasp=_OWASP.get(vuln_type, "API8"), status=status,
+            proof_kind=proof, evidence=finding,
             source="clientside").to_row())
         run.findings.append({"id": f"CS-{n[0]:04d}", "class": vuln_type,
                              "severity": finding.get("severity", "low"),
