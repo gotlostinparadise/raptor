@@ -30,6 +30,10 @@ class InjectionPoint:
     param: str
     location: str = "query"        # query | body
     content_type: str = "form"     # form | json (body only)
+    # Sibling params of the same endpoint+location at a baseline value, sent
+    # alongside the injected param so the app's vulnerable code path actually
+    # runs (many forms gate on a submit button / other required fields).
+    others: Dict[str, str] = field(default_factory=dict)
 
     @property
     def label(self) -> str:
@@ -113,35 +117,53 @@ def points_from_webgraph(normalized_dir: Path, *,
     ``endpoints.jsonl`` (method + path) to produce one point per tested param.
     """
     ndir = Path(normalized_dir)
+    from core.webgraph.scope import endpoint_id
     endpoints: Dict[str, Dict[str, Any]] = {}
     ep_file = ndir / "endpoints.jsonl"
     if ep_file.exists():
         for line in ep_file.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 row = json.loads(line)
-                from core.webgraph.scope import endpoint_id
                 endpoints[endpoint_id(row.get("method", "GET"), row.get("path", ""))] = row
 
-    points: List[InjectionPoint] = []
+    # Pass 1: every param per endpoint, so each point can carry the sibling form
+    # context (e.g. DVWA's Submit button) — many apps gate the vulnerable code on
+    # the other fields being present.
+    raw_params: List[Dict[str, Any]] = []
+    ep_params: Dict[str, List[tuple]] = {}
     param_file = ndir / "parameters.jsonl"
     if param_file.exists():
-        seen = set()
         for line in param_file.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             pr = json.loads(line)
-            loc = pr.get("location", "query")
-            if loc not in locations:
-                continue
-            ep = endpoints.get(pr.get("endpoint_id", ""))
-            if not ep:
-                continue
-            key = (ep["method"], ep["path"], pr["name"], loc)
-            if key in seen:
-                continue
-            seen.add(key)
-            points.append(InjectionPoint(method=ep["method"], path=ep["path"],
-                                         param=pr["name"], location=loc))
+            raw_params.append(pr)
+            ep_params.setdefault(pr.get("endpoint_id", ""), []).append(
+                (pr.get("name"), pr.get("location", "query")))
+
+    points: List[InjectionPoint] = []
+    seen = set()
+    for pr in raw_params:
+        loc = pr.get("location", "query")
+        if loc not in locations:
+            continue
+        eid = pr.get("endpoint_id", "")
+        ep = endpoints.get(eid)
+        if not ep:
+            continue
+        name = pr["name"]
+        key = (ep["method"], ep["path"], name, loc)
+        if key in seen:
+            continue
+        seen.add(key)
+        # Baseline sibling value = the param name (distinct per field). Distinct
+        # values matter: a shared constant makes password_new == password_conf on
+        # a change-password form, which actually changes the password (destroying
+        # the session). A submit button still satisfies isset() with any value.
+        others = {n: n for (n, l) in ep_params.get(eid, [])
+                  if n and n != name and l == loc}
+        points.append(InjectionPoint(method=ep["method"], path=ep["path"],
+                                     param=name, location=loc, others=others))
     return points
 
 

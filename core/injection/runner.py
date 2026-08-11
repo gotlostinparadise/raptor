@@ -72,14 +72,24 @@ def _with_query(url: str, param: str, value: str) -> str:
 
 def _send(engine, identity: str, base_url: str, point: InjectionPoint, payload: str):
     method = point.method.upper()
+    # Sibling params (the form's other fields, e.g. a Submit button) are sent at
+    # their baseline value so the app's vulnerable code path runs; the injected
+    # param carries the payload.
+    siblings = {k: v for k, v in (point.others or {}).items() if k != point.param}
     if point.location == "query":
-        url = _with_query(f"{base_url}{point.path}", point.param, payload)
+        parts = urlsplit(f"{base_url}{point.path}")
+        q = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+             if k != point.param and k not in siblings]
+        q.extend(siblings.items())
+        q.append((point.param, payload))
+        url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(q), parts.fragment))
         return engine.request(identity, method, url)
+    fields = {**siblings, point.param: payload}
     if point.content_type == "json":
-        body = json.dumps({point.param: payload}).encode("utf-8")
+        body = json.dumps(fields).encode("utf-8")
         ct = "application/json"
     else:
-        body = urlencode({point.param: payload}).encode("utf-8")
+        body = urlencode(fields).encode("utf-8")
         ct = "application/x-www-form-urlencoded"
     return engine.request(identity, method, f"{base_url}{point.path}", body=body,
                           headers={"Content-Type": ct})

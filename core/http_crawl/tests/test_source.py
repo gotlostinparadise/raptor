@@ -132,3 +132,36 @@ def test_authenticated_crawl_reuses_session_cookies():
     assert all("PHPSESSID=abc123" in (h.get("Cookie") or "") for h in seen)
     # the authenticated identity is recorded on the graph
     assert any(r["name"] == "session" for r in result.records.get("identities", []))
+
+
+def test_is_session_destroying_matches_logout_variants():
+    from core.http_crawl.source import _is_session_destroying
+    for u in ["https://a/logout", "https://a/logout.php", "https://a/user/logout",
+              "https://a/sign-out", "https://a/signout", "https://a/logoff",
+              "https://a/auth/log_out?next=/"]:
+        assert _is_session_destroying(u), u
+    for u in ["https://a/", "https://a/about", "https://a/vulnerabilities/sqli/?id=1",
+              "https://a/logouts-guide"]:
+        assert not _is_session_destroying(u), u
+
+
+def test_crawler_never_follows_logout():
+    seen = []
+
+    def h(method, url, headers, body):
+        p = urlsplit(url).path or "/"
+        seen.append(p)
+        if p == "/":
+            b = (b'<a href="/page1">1</a> <a href="/logout.php">out</a>'
+                 b' <a href="/view?id=1">v</a>')
+        else:
+            b = b"<title>x</title>"
+        return resp(200, body=b, url=url, **{"Content-Type": "text/html"})
+
+    ctx = RunContext(
+        origins=(_BASE,), surface=Surface(origins={_BASE}), profile=PROFILES["safe"],
+        raw_dir=None, normalized_dir=None,
+        http_factory=lambda hosts: FakeClient(h), session=None)
+    HttpCrawlSource().run(ctx)
+    assert "/logout.php" not in seen      # the session-destroying link is never fetched
+    assert "/page1" in seen               # ordinary links still crawled

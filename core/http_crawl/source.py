@@ -23,6 +23,7 @@ one) it crawls unauthenticated — unchanged.
 
 from __future__ import annotations
 
+import re
 from collections import deque
 from typing import Any, List, Optional, Sequence, Set, Tuple
 from urllib.parse import parse_qsl, urlsplit
@@ -71,6 +72,20 @@ def _plain_fetch(client: Any, url: str) -> Any:
             return client.request("GET", url, follow_redirects=True)
         except HttpError as exc:
             return Response(status=int(exc.status or 0), headers={}, body=b"", url=url)
+
+
+# Links that would tear down the crawl's OWN session. Following one mid-crawl
+# logs the crawler out, so every later authenticated page — and every downstream
+# phase that shares the session (inject/authz/clientside) — silently sees an
+# anonymous session. These are recorded as endpoints but never fetched/followed.
+_SESSION_DESTROYING_RE = re.compile(
+    r"(?:^|/)(?:logout|log[-_]?out|logoff|log[-_]?off|signout|sign[-_]?out|"
+    r"deconnexion|disconnect)(?:[./?]|$)", re.IGNORECASE)
+
+
+def _is_session_destroying(url: str) -> bool:
+    """True for a logout/sign-out URL that must not be fetched by the crawler."""
+    return bool(_SESSION_DESTROYING_RE.search(urlsplit(url).path or ""))
 
 
 @register
@@ -215,6 +230,8 @@ class HttpCrawlSource(Source):
             if key in visited:
                 continue
             visited.add(key)
+            if _is_session_destroying(url):
+                continue   # never fetch logout — it would end our own session
 
             resp = self._fetch(ctx, client, ident_name, url)
             if resp is None:
@@ -243,6 +260,8 @@ class HttpCrawlSource(Source):
                 if not nav or nav in known:
                     continue
                 known.add(nav)
+                if _is_session_destroying(nav):
+                    continue   # emitted as an endpoint above, but never followed
                 result.discovered.urls.add(nav)
                 if depth < max_depth:
                     queue.append((nav, depth + 1))
