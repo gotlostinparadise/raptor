@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""Nuclei template scan + tech→CVE correlation over the recon graph.
+
+Two cheap, high-signal capabilities:
+  * tech→CVE — cross-reference the recon graph's `tech` fingerprints against a
+    curated CVE table. Offline, always runs; results are SUSPECTED indicators
+    (a version match is not a proof).
+  * nuclei — when the `nuclei` binary is installed and testing is authorized, run
+    it (sandboxed, egress-allowlisted) and ingest matches as CONFIRMED findings.
+
+Degrades gracefully when nuclei is absent (tech→CVE still runs).
+
+SAFE BY DEFAULT: the nuclei run needs --active AND a declared `authorization`.
+The tech→CVE pass sends nothing and runs in dry-run too.
+
+Usage:
+  raptor-nuclei --out-dir <dir> --recon-graph out/recon/graph/recon.json      (tech→CVE)
+  raptor-nuclei --out-dir <dir> --target https://x --authorization Y --active
+  raptor-nuclei --out-dir <dir> --config nuclei.json --active
+
+Exit codes: 0 ok, 2 usage / gate error.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.nuclei.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

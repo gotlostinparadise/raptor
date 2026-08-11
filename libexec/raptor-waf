@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+"""WAF detection + payload-evasion mutations.
+
+Two modes:
+  --mutate PAYLOAD   print WAF-evasion variants of a payload (offline, always safe)
+  --url URL --active fetch the target and fingerprint any WAF fronting it
+                     (one benign GET; requires --active + --authorization)
+
+Rate/concurrency pacing lives on the web-graph safety Profile
+(rps/concurrency/waf_evasion knobs); this tool is detection + payload transforms.
+
+Usage:
+  raptor-waf --mutate "' UNION SELECT 1"
+  raptor-waf --url https://app.example.com --active --authorization "eng Y"
+
+Exit codes: 0 ok, 2 usage / gate error.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.waf.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

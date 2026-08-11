@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""App-layer content discovery — JS endpoints/secrets, exposed files, source maps.
+
+Mines the target's JavaScript for endpoints and (redacted) leaked secrets, probes
+a curated list of sensitive paths (.git, .env, backups, framework debug
+endpoints) with content signatures, and recovers source maps. Discovered
+endpoints feed the graph; secrets/exposed-files/source-map leaks become proven
+findings. Secrets are stored redacted (preview + fingerprint), never verbatim.
+
+SAFE BY DEFAULT: no request is sent unless --active AND a declared `authorization`.
+
+Usage:
+  raptor-discover --out-dir <dir> --url https://app.example.com            (dry-run)
+  raptor-discover --out-dir <dir> --url https://app.x --authorization Y --active
+  raptor-discover --out-dir <dir> --config discovery.json --active --no-exposed
+
+Exit codes: 0 ok, 2 usage / gate error.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.discovery.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

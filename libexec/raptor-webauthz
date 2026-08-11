@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""Access-control (IDOR/BOLA/BFLA) testing via multi-identity replay.
+
+The #1 web/API risk and the one scanners can't find — because it needs ground
+truth only the operator has: who legitimately owns what. You declare identities
+(auth by env-var reference) and concrete tests (a request + the owner identity);
+this replays each request as every identity and lets the response diff deliver
+the verdict. A non-owner reading the owner's object is a confirmed break, proven
+by the diff (not an LLM), and surfaced as a verified outcome.
+
+Two modes:
+  --init   seed an authz-config.json from an api-inventory.json / authz-matrix.json
+  (default) run the tests from --config
+
+SAFE BY DEFAULT: no request is sent unless --active is passed AND the config
+declares a non-empty `authorization` attestation (the mechanical gate). Without
+--active you get a dry-run plan + the surface graph.
+
+Usage:
+  raptor-webauthz --out-dir <dir> --init --inventory api-inventory.json
+  raptor-webauthz --out-dir <dir> --config authz-config.json            (dry-run)
+  raptor-webauthz --out-dir <dir> --config authz-config.json --active   (sends traffic)
+
+Output (under --out-dir):
+  authz-config.json (--init) | webauthz-findings.json | graph/web.* | verified outcomes
+Exit codes: 0 ok, 2 usage / gate error.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.webauthz.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())
