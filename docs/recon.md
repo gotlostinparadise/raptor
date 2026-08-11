@@ -128,6 +128,26 @@ harness. No config / no engine ⇒ an anonymous crawl, unchanged.
 set via `ProjectManager.set_recon_scope(...)` and modelled on the `binaries`
 field. Explicit CLI roots / `--profile` always win.
 
+### Optional intelligence layer (opt-in LLM)
+
+The engine is mechanical; four opt-in LLM layers sit at the edges, each a
+*proposal* gated by a mechanical or operator verifier (see
+`docs/recon-intelligence.md`). All share one seam,
+`core/recon/llm.py:ask_structured` (injectable `ask=` for offline tests,
+`{}`-on-failure → mechanical fallback). No model flag ⇒ today's exact
+deterministic behaviour.
+
+| Flag / command | Layer | Verify-gate |
+|---|---|---|
+| `/recon-seed --org … --model …` | scope/acquisition proposal → `scope-proposal.json` | **operator confirmation** |
+| `/recon --brute-model <name>` | target-specific bruteforce candidates | **`dnsx`** resolution |
+| `/recon --strategy-model <name>` | adaptive source pruning between rounds | selects only registered sources |
+| `/recon-triage [--model <name>]` | ranked worklist over the graph | advisory (read-only) |
+
+The related **workflow bridge** `/recon --full` (requires `--authorization`)
+hands recon's discovered origins to the platform's `/webpentest`
+(`core/recon/webpentest_bridge.py`) — infra recon → app pentest over one run dir.
+
 ---
 
 ## Censys (`core/recon/censys.py`, `/censys`, `libexec/raptor-censys`)

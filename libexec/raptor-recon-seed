@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""Propose reconnaissance scope candidates for an org (operator-confirmed).
+
+Recon intelligence layer 1: an LLM proposes apex domains / brands / ASNs that
+plausibly belong to the target org (including likely acquisitions), each with a
+confidence + rationale. It NEVER scans — it writes a reviewable
+scope-proposal.json; the operator confirms ownership/authorization and feeds the
+confirmed roots to /recon (--scope-file).
+
+Usage:
+  raptor-recon-seed --out-dir <dir> --org "Acme Corp" --model gemini-2.5-pro
+  raptor-recon-seed --out-dir <dir> --org "Acme" --seed acme.com --seed acme.io \
+                    --model claude-opus-4-8 --stdout
+
+Output (under --out-dir):
+  scope-proposal.json   candidates with kind/confidence/rationale
+
+Exit codes: 0 ok, 2 usage error.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.recon.seed_cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

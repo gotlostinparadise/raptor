@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+from core.recon.llm import ask_structured
+
 # Interesting name tokens → weight. Deliberately conservative; a prototype set an
 # operator can tune. Matched against delimiter-split host labels (exact part).
 _CRITICAL = 3.0
@@ -217,16 +219,6 @@ def heuristic_score(cand: Candidate) -> Tuple[float, List[str]]:
     return score, reasons
 
 
-def _default_ask(prompt: str, schema: Dict[str, Any], system: str, model: str) -> Dict[str, Any]:
-    """Real LLM call through the shared stack (metered, cached, scorecarded)."""
-    from core.llm.client import LLMClient
-    client = LLMClient()
-    mc = client.config.config_for_model(model)
-    resp = client.generate_structured(prompt, schema, system_prompt=system,
-                                      model_config=mc)
-    return getattr(resp, "result", None) or {}
-
-
 def _build_prompt(candidates: List[Candidate]) -> str:
     lines = [
         "Rank these already-discovered recon targets by how attack-worthy each "
@@ -249,11 +241,7 @@ def llm_rerank(
     Returns ``(ordered_ids, rationales, narrative)``. On any failure returns
     ``([], {}, "")`` so the caller keeps the heuristic order.
     """
-    ask = ask or _default_ask
-    try:
-        result = ask(_build_prompt(candidates), _SCHEMA, _SYSTEM, model)
-    except Exception:
-        return [], {}, ""
+    result = ask_structured(_build_prompt(candidates), _SCHEMA, _SYSTEM, model, ask=ask)
     ranked = result.get("ranked") or []
     ordered_ids: List[str] = []
     rationales: Dict[str, str] = {}

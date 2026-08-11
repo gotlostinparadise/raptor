@@ -51,6 +51,7 @@ class RunSummary:
     asset_counts: Dict[str, int] = field(default_factory=dict)
     node_count: int = 0
     edge_count: int = 0
+    strategy: List[str] = field(default_factory=list)   # adaptive-orchestration notes
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -59,7 +60,23 @@ class RunSummary:
             "sources_run": self.sources_run, "record_counts": self.record_counts,
             "errors": self.errors, "asset_counts": self.asset_counts,
             "node_count": self.node_count, "edge_count": self.edge_count,
+            "strategy": self.strategy,
         }
+
+
+def _graph_state(assets: Assets, accumulated: Mapping[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+    """A compact state summary for the strategist — counts + edge/WAF presence."""
+    edge_providers = sorted({
+        r.get("edge_name") for r in accumulated.get("hosts", []) if r.get("edge_name")
+    })
+    return {
+        "names": len(assets.names),
+        "ips": len(assets.ips),
+        "http_services": len(accumulated.get("http", []) or []),
+        "open_ports": len(accumulated.get("ports", []) or []),
+        "certs": len(accumulated.get("certs", []) or []),
+        "edge_providers": edge_providers,
+    }
 
 
 def _resolve_profile(profile: Union[str, Profile]) -> Profile:
@@ -171,6 +188,8 @@ def run_recon(
     credentials: Optional[Mapping[str, str]] = None,
     http_factory: Optional[Any] = None,
     seed_ips: Sequence[str] = (),
+    strategy_model: Optional[str] = None,
+    strategist_ask: Optional[Any] = None,
 ) -> RunSummary:
     """Run the recon pipeline end to end and return a :class:`RunSummary`.
 
@@ -206,6 +225,9 @@ def run_recon(
         out_dir=str(out), roots=list(canon_roots), profile=prof.name, rounds=0,
     )
     ran: List[str] = []
+    # Adaptive orchestration (layer 5): sources the strategist chose to skip in
+    # subsequent rounds. Empty unless strategy_model is set.
+    active_skip: set = set()
 
     for round_no in range(1, max_rounds + 1):
         summary.rounds = round_no
@@ -217,6 +239,8 @@ def run_recon(
             http_factory=http_factory,
         )
         for src in instances:
+            if src.name in active_skip:
+                continue
             if not src.enabled_for(prof) or not src.available(ctx):
                 continue
             try:
@@ -241,6 +265,16 @@ def run_recon(
         # Fixed point: no source grew the asset set this round.
         if len(assets) == before:
             break
+        # Adaptive orchestration: let the strategist prune/prioritise next round.
+        if strategy_model and round_no < max_rounds:
+            from core.recon.strategist import next_actions
+            avail = [s.name for s in instances if s.name not in active_skip
+                     and s.enabled_for(prof) and s.available(ctx)]
+            decision = next_actions(_graph_state(assets, accumulated), avail,
+                                    strategy_model, ask=strategist_ask)
+            active_skip |= decision.skip_set(avail)
+            if decision.reason:
+                summary.strategy.append(f"round {round_no}: {decision.reason}")
 
     summary.sources_run = ran
     summary.record_counts = persist_records(normalized_dir, accumulated)

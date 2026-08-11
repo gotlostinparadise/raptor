@@ -56,37 +56,66 @@ class BruteforceSource(Source):
 
     binary = BINARY
 
-    def __init__(self, wordlist: Optional[str] = None, runner: Optional[Any] = None) -> None:
+    def __init__(self, wordlist: Optional[str] = None, runner: Optional[Any] = None,
+                 llm_model: Optional[str] = None, ask: Optional[Any] = None) -> None:
         self._wordlist = wordlist or os.environ.get("RAPTOR_DNS_WORDLIST")
         self._run = runner or run_net_tool
+        # Optional LLM permutation seeding (layer 3). dnsx is still the verdict.
+        # Env default mirrors RAPTOR_DNS_WORDLIST so the orchestrator's
+        # default-constructed source picks up the CLI's --brute-model.
+        self._llm_model = llm_model or os.environ.get("RAPTOR_BRUTE_MODEL")
+        self._ask = ask
+
+    def _has_wordlist(self) -> bool:
+        return bool(self._wordlist) and Path(self._wordlist).is_file()
 
     def available(self, ctx: RunContext) -> bool:
+        # Runs when there's a wordlist OR an LLM permutation model (either can
+        # produce candidates; dnsx verifies both).
         return (
             super().available(ctx)
             and tool_available(self.binary)
-            and bool(self._wordlist)
-            and Path(self._wordlist).is_file()
+            and (self._has_wordlist() or bool(self._llm_model))
         )
 
     def _candidates(self, ctx: RunContext, cap: int) -> List[str]:
-        """Wordlist × roots (bounded by ``cap``), de-duplicated."""
-        words: List[str] = []
-        with open(self._wordlist, encoding="utf-8", errors="ignore") as fh:
-            for line in fh:
-                w = line.strip().lower()
-                if w and not w.startswith("#"):
-                    words.append(w)
+        """LLM-proposed candidates (if any) + wordlist × roots, bounded + deduped.
+
+        LLM candidates go first so they resolve within the cap; both are verified
+        by the ``dnsx`` pass in :meth:`run`.
+        """
         out: List[str] = []
-        for root in ctx.roots:
-            for w in words:
-                out.append(f"{w}.{root}")
-                if len(out) >= cap:
-                    return list(dict.fromkeys(out))
-        return list(dict.fromkeys(out))
+        seen = set()
+
+        def _add(name: str) -> bool:
+            if name and name not in seen:
+                seen.add(name)
+                out.append(name)
+            return len(out) < cap
+
+        if self._llm_model:
+            from core.recon.permute import llm_candidates
+            for n in llm_candidates(ctx.roots, sorted(ctx.assets.names),
+                                    self._llm_model, cap=min(cap, 300), ask=self._ask):
+                if not _add(n):
+                    return out
+
+        if self._has_wordlist():
+            words: List[str] = []
+            with open(self._wordlist, encoding="utf-8", errors="ignore") as fh:
+                for line in fh:
+                    w = line.strip().lower()
+                    if w and not w.startswith("#"):
+                        words.append(w)
+            for root in ctx.roots:
+                for w in words:
+                    if not _add(f"{w}.{root}"):
+                        return out
+        return out
 
     def run(self, ctx: RunContext) -> SourceResult:
         result = SourceResult(source=self.name)
-        if not ctx.roots or not self._wordlist:
+        if not ctx.roots or not (self._has_wordlist() or self._llm_model):
             return result
 
         knobs = ctx.profile.knobs
@@ -105,9 +134,12 @@ class BruteforceSource(Source):
             "-rate-limit", str(knobs.get("dns_rate", 300)),
             "-threads", str(knobs.get("dns_threads", 25)),
         ]
+        # Only add the wordlist to the sandbox read-allowlist when there is one
+        # (LLM-only runs have no wordlist file to read).
+        readable = [str(Path(self._wordlist).resolve())] if self._has_wordlist() else []
         tr = self._run(cmd, output=ctx.raw_dir, tcp_ports=list(TCP_PORTS),
                        timeout=TIMEOUT_SECONDS, env=ctx.env,
-                       readable_paths=[str(Path(self._wordlist).resolve())])
+                       readable_paths=readable)
         if tr.timed_out:
             result.error = "bruteforce (dnsx) timed out"
         if not tr.stdout:

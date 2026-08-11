@@ -62,6 +62,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--authz-config", default=None,
                    help="with --web --browser, a /webauthz identity config so the "
                         "crawl runs authenticated (reaches the logged-in surface)")
+    p.add_argument("--full", action="store_true",
+                   help="after recon, hand discovered origins to /webpentest "
+                        "(discover→inject→…→nuclei→report); needs --authorization")
+    p.add_argument("--brute-model", default=None,
+                   help="LLM that proposes target-specific bruteforce candidates "
+                        "from observed naming (dnsx still verifies each)")
+    p.add_argument("--strategy-model", default=None,
+                   help="LLM that adaptively prunes/prioritises sources between "
+                        "discovery rounds (selects only among available sources)")
     p.add_argument("--max-rounds", type=int, default=3,
                    help="max discovery-loop rounds (default 3)")
     p.add_argument("--rebuild", action="store_true",
@@ -195,6 +204,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"error: {gate_err}", file=sys.stderr)
         return 2
 
+    if args.full and not args.authorization.strip():
+        print("error: --full hands origins to /webpentest for active web testing "
+              "— it requires --authorization \"<written authorization>\"",
+              file=sys.stderr)
+        return 2
+
     if args.save_scope:
         saved = _save_scope(roots, profile)
         if saved:
@@ -206,6 +221,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     load_sources()
 
+    # Layer 3: the bruteforce source reads RAPTOR_BRUTE_MODEL at construction
+    # (mirrors RAPTOR_DNS_WORDLIST), so the orchestrator's default-constructed
+    # source picks up --brute-model without threading a source-specific param.
+    if args.brute_model:
+        os.environ["RAPTOR_BRUTE_MODEL"] = args.brute_model
+
     from core.config import RaptorConfig
     env = dict(RaptorConfig.get_safe_env())
     credentials = _resolve_credentials()
@@ -214,6 +235,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     summary = run_recon(
         roots, args.out_dir, profile=profile, max_rounds=args.max_rounds,
         env=env, credentials=credentials, seed_ips=seed_ips,
+        strategy_model=args.strategy_model,
     )
 
     web_summary = None
@@ -227,16 +249,31 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             authz_config=args.authz_config,
         )
 
+    full_summary = None
+    if args.full:
+        from core.recon.webpentest_bridge import run_full_pentest
+        full_summary = run_full_pentest(
+            args.out_dir, profile=profile, authorization=args.authorization,
+            browser=args.browser,
+        )
+
     if args.stdout:
         payload = {"recon": summary.to_dict()}
         if web_summary is not None:
             payload["web"] = web_summary.to_dict()
+        if full_summary is not None:
+            payload["full"] = full_summary.to_dict()
         print(json.dumps(payload, indent=2))
     else:
         print(_render(summary))
         if web_summary is not None:
             print(f"  web:     {web_summary.node_count} nodes, "
                   f"{web_summary.edge_count} edges → {args.out_dir}/web/graph/web.json")
+        if full_summary is not None:
+            n = len(full_summary.invocations)
+            print(f"  full:    /webpentest on {n} origin(s) → "
+                  f"{args.out_dir}/webpentest/ " +
+                  (f"({full_summary.skipped})" if full_summary.skipped else ""))
     return 0
 
 

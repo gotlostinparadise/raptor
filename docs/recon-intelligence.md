@@ -45,23 +45,33 @@ fails, so recon is fully functional offline and in CI.
 
 ## Where the LLM helps (ranked by value)
 
-1. **Scope / acquisition mapping** *(planned — `/recon --seed`)*. The fuzziest
-   step: which apexes, ASNs, brands, and acquisitions belong to this org. LLM +
-   whois/censys/web proposes candidate roots → operator confirms → the mechanical
-   pipeline enumerates them. Horizontal enumeration by reasoning, not regex.
-2. **Triage & ranking** *(implemented — this doc's `core/recon/triage.py`)*. Turn
-   a flat list of hosts/services into a ranked worklist with rationale and a
-   surface narrative. Read-only over the finished graph; zero target traffic.
-3. **Permutation seeding** *(planned)*. Feed the mechanical `bruteforce` source
-   *target-specific* candidates derived from observed naming conventions, instead
-   of a generic wordlist. Output still goes through `dnsx`. Fits the `Source`
-   contract as an `active=False` candidate generator.
+1. **Scope / acquisition mapping** *(implemented — `/recon-seed`,
+   `core/recon/seed.py`)*. The fuzziest step: which apexes, ASNs, brands, and
+   acquisitions belong to this org. The LLM proposes candidate roots →
+   **operator confirms** (the verify-gate — scope is never auto-added) → the
+   mechanical pipeline enumerates the confirmed ones. Horizontal enumeration by
+   reasoning, not regex.
+2. **Triage & ranking** *(implemented — `core/recon/triage.py`)*. Turn a flat
+   list of hosts/services into a ranked worklist with rationale and a surface
+   narrative. Read-only over the finished graph; zero target traffic.
+3. **Permutation seeding** *(implemented — `core/recon/permute.py` →
+   `bruteforce`)*. Feed the mechanical `bruteforce` source *target-specific*
+   candidates derived from observed naming conventions, instead of only a generic
+   wordlist. Output still goes through `dnsx` (the verify-gate). Enabled with
+   `/recon --brute-model <name>`.
 4. **Narrative / synthesis** *(folded into triage)*. "3 origin candidates behind
    DDoS-Guard, a staging API with no WAF, an exposed `.git`."
-5. **Adaptive orchestration** *(planned)*. Strategic "what to run next" — wildcard
-   found → skip bruteforce; DDoS-Guard → prioritise origin discovery; spec
-   endpoint → pivot to `/webgraph`. The *sources* stay mechanical; the LLM makes
-   the *escalation* decision.
+5. **Adaptive orchestration** *(implemented — `core/recon/strategist.py`)*.
+   Strategic "what to run next" — wildcard found → skip bruteforce; DDoS-Guard →
+   prioritise origin discovery. The *sources* stay mechanical and the strategist
+   can only *select among already-registered sources*; the LLM makes the
+   *escalation* decision. Enabled with `/recon --strategy-model <name>`.
+
+All four LLM layers share one seam — `core/recon/llm.py:ask_structured`
+(propose-only, injectable `ask=` for offline tests, `{}`-on-failure so every layer
+degrades to its mechanical path). The related **workflow bridge** `/recon --full`
+hands recon's discovered origins to the platform's `/webpentest`
+(`core/recon/webpentest_bridge.py`) — infra recon → app pentest in one command.
 
 Where the LLM is deliberately **excluded**: enumeration, resolution, port
 scanning, HTTP probing, graph merge. Deterministic, cheap, reproducible.

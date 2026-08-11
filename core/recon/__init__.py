@@ -42,6 +42,8 @@ compromised parser cannot exfiltrate off the declared host set.
 
 __all__ = [
     "builder", "bruteforce", "censys", "cli", "crtsh", "dnsx", "exposed_origin",
-    "graph", "httpx", "model", "naabu", "orchestrator", "probe", "registry",
-    "scope", "source", "subfinder", "toolrunner", "vhost", "webbridge",
+    "graph", "httpx", "llm", "model", "naabu", "orchestrator", "permute", "probe",
+    "registry", "scope", "seed", "seed_cli", "source", "strategist", "subfinder",
+    "toolrunner", "triage", "triage_cli", "vhost", "webbridge",
+    "webpentest_bridge",
 ]
