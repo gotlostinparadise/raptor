@@ -24,7 +24,8 @@ from core.session.authz import verdict_records
 from core.session.engine import SessionEngine
 from core.session.identity import Identity
 from core.session.login import (
-    ApiKeyAuth, BasicAuth, BearerAuth, FormLogin, JsonLogin, resolve_credential,
+    ApiKeyAuth, BasicAuth, BearerAuth, FormLogin, FormLoginWithToken, JsonLogin,
+    resolve_credential,
 )
 from core.session.replay import RequestTemplate, authorization_diff, replay
 from core.webauthz.config import AuthzConfig, IdentityConfig, LoginConfig
@@ -85,12 +86,17 @@ def _strategy_for(login: LoginConfig, env) -> Tuple[Optional[Any], Optional[str]
         if not (u and p):
             return None, f"missing basic creds (${login.username_env}/${login.password_env})"
         return BasicAuth(u, p), None
-    if t in ("form", "json"):
+    if t in ("form", "json", "form_csrf", "form_token", "csrf"):
         fields = {}
         for k, v in login.fields.items():
             fields[k] = resolve_credential(v[4:], env) if isinstance(v, str) and v.startswith("env:") else v
         if t == "json":
             return JsonLogin(login.login_url, fields, token_path=login.token_path), None
+        if t in ("form_csrf", "form_token", "csrf"):
+            return FormLoginWithToken(
+                login.login_url, fields,
+                token_field=login.token_field or "user_token",
+                get_url=login.get_url or None, as_json=login.as_json), None
         return FormLogin(login.login_url, fields, as_json=login.as_json), None
     return None, f"unknown login type {t!r}"
 
