@@ -65,7 +65,7 @@ class DnsxSource(Source):
         knobs = ctx.profile.knobs
         cmd = [
             self.binary, "-l", str(names_file),
-            "-a", "-aaaa", "-cname", "-resp", "-json", "-silent",
+            "-a", "-aaaa", "-cname", "-resp", "-json", "-silent", "-duc",
             "-rate-limit", str(knobs.get("dns_rate", 300)),
             "-threads", str(knobs.get("dns_threads", 25)),
         ]

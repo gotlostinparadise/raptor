@@ -86,7 +86,8 @@ class HttpxSource(Source):
         knobs = ctx.profile.knobs
         cmd = [
             self.binary, "-list", str(targets_file),
-            "-json", "-silent", "-no-color",
+            "-json", "-silent", "-no-color", "-duc",
+            "-timeout", "10", "-retries", "1",
             "-title", "-status-code", "-tech-detect", "-web-server",
             "-tls-grab", "-content-length",
             "-rate-limit", str(knobs.get("http_rate", 10)),

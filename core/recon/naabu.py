@@ -59,7 +59,7 @@ class NaabuSource(Source):
         knobs = ctx.profile.knobs
         cmd = [
             self.binary, "-list", str(ips_file),
-            "-s", "c", "-json", "-silent",
+            "-s", "c", "-json", "-silent", "-duc",
             "-rate", str(knobs.get("dns_rate", 300)),
         ]
         tr = self._run(cmd, output=ctx.raw_dir, tcp_ports=None,
