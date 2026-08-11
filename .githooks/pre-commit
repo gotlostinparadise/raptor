@@ -1,0 +1,25 @@
+#!/bin/sh
+# RAPTOR delivery guard (pre-commit).
+#
+# Refuses to commit local-only / secret-bearing files. The load-bearing case is
+# core/llm/config.py, which carries a "Do NOT commit this line" local max_cost
+# override that must never reach a shared branch. Activate this hook once per
+# clone with:  git config core.hooksPath .githooks   (see docs/delivery.md)
+
+blocked=""
+for path in $(git diff --cached --name-only); do
+  case "$path" in
+    core/llm/config.py)                 blocked="$blocked $path" ;;  # local override
+    .omni|.omni.local|.censys|*secrets.json|*.pem|*.key) blocked="$blocked $path" ;;
+  esac
+done
+
+if [ -n "$blocked" ]; then
+  echo "pre-commit: refusing to commit local-only / secret-bearing file(s):" >&2
+  for p in $blocked; do echo "  - $p" >&2; done
+  echo "" >&2
+  echo "Unstage them:  git restore --staged$blocked" >&2
+  echo "core/llm/config.py holds a 'Do NOT commit' local max_cost override." >&2
+  exit 1
+fi
+exit 0

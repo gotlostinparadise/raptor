@@ -1,0 +1,25 @@
+#!/bin/sh
+# RAPTOR delivery gate (pre-push).
+#
+# Runs the fast, deterministic command-metadata CI check before a push, so a
+# change that would red the `check_command_metadata.py` gate is caught locally
+# instead of in CI. Enforces only when the repo virtualenv is present (the
+# primary checkout); skips advisorily from a bare worktree that has no venv.
+# Activate with:  git config core.hooksPath .githooks   (see docs/delivery.md)
+
+repo="$(git rev-parse --show-toplevel)"
+py="$repo/.venv/bin/python"
+
+if [ ! -x "$py" ]; then
+  echo "pre-push: repo venv not found; skipping metadata gate (advisory)." >&2
+  exit 0
+fi
+
+chk="$repo/.github/scripts/check_command_metadata.py"
+[ -f "$chk" ] || exit 0
+
+if ! "$py" "$chk"; then
+  echo "pre-push: command-metadata CI check FAILED — fix before pushing." >&2
+  exit 1
+fi
+exit 0
