@@ -65,6 +65,7 @@ overview:
 | [Validation](validation.md) | Exploitability validation pipeline (stages 0--1) |
 | [Binary Analysis](binary-analysis.md) | Binary oracle, `/binary`, exploit feasibility |
 | [SCA](sca.md) | Software composition analysis |
+| [Recon](recon.md) | OSINT/asset enrichment sources (`/censys`) |
 | [Frida](frida.md) | Dynamic instrumentation |
 | [Sandbox](sandbox.md) | Process isolation and sandboxing |
 | [LLM Providers](llm.md) | Provider configuration, Bedrock, multi-model workflows, cost management |

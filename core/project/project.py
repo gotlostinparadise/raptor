@@ -23,7 +23,7 @@ PROJECTS_DIR = Path.home() / ".raptor" / "projects"
 DEFAULT_OUTPUT_BASE = Path("out/projects")
 
 
-_PROJECT_SCHEMA_VERSION = 3
+_PROJECT_SCHEMA_VERSION = 4
 
 
 @dataclass
@@ -45,7 +45,11 @@ class Project:
     #
     # v3 adds a project-owned threat-model artefact path. Older files
     # still load; the next write upgrades them.
-    version: int = 3
+    #
+    # v4 adds ``recon_scope`` — the /recon in-scope roots + safety profile,
+    # persisted so an operator doesn't re-pass them every run (mirrors how
+    # ``binaries`` persists the binary-oracle config).
+    version: int = 4
     # Operator-supplied debug binaries for binary_oracle reachability
     # enrichment. Persisted across runs so the operator doesn't re-pass
     # ``--binary`` every invocation. List for ``--target-kind=hybrid``
@@ -55,6 +59,10 @@ class Project:
     binaries: List[str] = field(default_factory=list)
     threat_model_path: str = ""
     threat_model_updated: str = ""
+    # Persisted /recon scope: {"roots": [...], "profile": "home"}. Operator
+    # config so `/recon` (no args) can reuse the project's in-scope roots +
+    # safety profile. Loaded by the recon CLI when no roots are passed.
+    recon_scope: Dict = field(default_factory=dict)
 
     def to_dict(self) -> Dict:
         return {
@@ -68,6 +76,7 @@ class Project:
             "binaries": list(self.binaries),
             "threat_model_path": self.threat_model_path,
             "threat_model_updated": self.threat_model_updated,
+            "recon_scope": dict(self.recon_scope),
         }
 
     @classmethod
@@ -75,6 +84,9 @@ class Project:
         binaries = data.get("binaries") or []
         if not isinstance(binaries, list):
             binaries = []
+        recon_scope = data.get("recon_scope") or {}
+        if not isinstance(recon_scope, dict):
+            recon_scope = {}
         try:
             version = int(data.get("version", _PROJECT_SCHEMA_VERSION))
         except (TypeError, ValueError):
@@ -100,6 +112,7 @@ class Project:
             binaries=[str(b) for b in binaries if isinstance(b, str)],
             threat_model_path=str(data.get("threat_model_path") or ""),
             threat_model_updated=str(data.get("threat_model_updated") or ""),
+            recon_scope=recon_scope,
         )
 
     @property
@@ -456,6 +469,26 @@ class ProjectManager:
             raise ValueError(f"Project '{name}' not found")
 
         project.description = description
+        save_json(self.projects_dir / f"{name}.json", project.to_dict())
+        return project
+
+    def set_recon_scope(self, name: str, roots: List[str],
+                        profile: Optional[str] = None) -> Project:
+        """Persist the /recon in-scope roots (+ optional profile) on a project.
+
+        Mirrors :meth:`update_notes` — load, mutate, atomic save. ``roots`` are
+        stored de-duplicated and stripped; ``profile`` is stored only when given
+        so a later call can update roots without clobbering the profile.
+        """
+        project = self.load(name)
+        if not project:
+            raise ValueError(f"Project '{name}' not found")
+        clean_roots = list(dict.fromkeys(r.strip() for r in roots if r and r.strip()))
+        scope: Dict = dict(project.recon_scope)
+        scope["roots"] = clean_roots
+        if profile:
+            scope["profile"] = profile
+        project.recon_scope = scope
         save_json(self.projects_dir / f"{name}.json", project.to_dict())
         return project
 

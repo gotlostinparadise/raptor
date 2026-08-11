@@ -60,6 +60,22 @@ def _validate_project(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
                     errors.append(
                         f"binaries[{i}] must be a non-empty string")
 
+    if "recon_scope" in data:
+        recon_scope = data["recon_scope"]
+        if not isinstance(recon_scope, dict):
+            errors.append("recon_scope must be an object")
+        else:
+            roots = recon_scope.get("roots", [])
+            if not isinstance(roots, list):
+                errors.append("recon_scope.roots must be a list")
+            else:
+                for i, r in enumerate(roots):
+                    if not isinstance(r, str) or not r.strip():
+                        errors.append(
+                            f"recon_scope.roots[{i}] must be a non-empty string")
+            if "profile" in recon_scope and not isinstance(recon_scope["profile"], str):
+                errors.append("recon_scope.profile must be a string")
+
     return len(errors) == 0, errors
 
 

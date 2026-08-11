@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""Rank a finished recon run's hosts into an attack-worthy worklist.
+
+A read-only advisory pass over a recon run directory: it reads graph/recon.json,
+scores every discovered host by mechanical interest signals (interesting name
+tokens, live HTTP service, exposed-origin flag, non-standard ports, interesting
+tech banner), and writes a ranked worklist. With --model, an LLM reorders and
+annotates the list — but it can only reorder a set the engine already found and
+can never assert a finding (see docs/recon-intelligence.md). Never touches the
+target.
+
+Usage:
+  raptor-recon-triage <recon-run-dir>
+  raptor-recon-triage --out-dir <recon-run-dir> --model gemini-2.5-pro
+  raptor-recon-triage <recon-run-dir> --top 25 --stdout
+
+Output (under the run dir):
+  triage.json   ranked targets with scores, signals, rationale, narrative
+  triage.md     operator-readable worklist
+
+Exit codes: 0 ok, 2 usage / missing graph.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.recon.triage_cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())
