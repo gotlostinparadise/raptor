@@ -62,11 +62,21 @@ def confirm_dom_xss(
             fired = None
             try:
                 session.navigate(url)
-                try:
-                    session.eval_js("new Promise(r => setTimeout(r, 150))")
-                except Exception:
-                    pass
-                fired = session.eval_js("window.__raptor_xss")
+                # Poll for the sentinel instead of a single fixed wait: an SPA
+                # renders (and executes the injected handler) asynchronously, so
+                # a one-shot 150ms read races the framework and misses the hit
+                # under load. Return the instant it fires; give up after ~2s.
+                for _ in range(20):
+                    try:
+                        fired = session.eval_js("window.__raptor_xss")
+                    except Exception:
+                        fired = None
+                    if fired == tok:
+                        break
+                    try:
+                        session.eval_js("new Promise(r => setTimeout(r, 100))")
+                    except Exception:
+                        break
             except Exception:
                 fired = None
             finally:
