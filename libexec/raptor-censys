@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""Censys enrichment for a set of known IPs — FREE-TIER compatible.
+
+Takes IPs RAPTOR already discovered and asks Censys what it has seen
+there: open ports, service software, ASN/org/country, and DNS names on
+served TLS certificates (cert SANs inside scope are new subdomains).
+
+Uses per-asset LOOKUP endpoints only, so it works on a free API key with
+no organization ID. It never calls the paid bulk-search endpoint.
+
+Usage:
+  raptor-censys --run-dir <dir> [--domain example.com] [--domain ...]
+  raptor-censys --ips <file>    [--domain example.com] [--out-dir <dir>]
+  raptor-censys --ip 1.2.3.4 --ip 5.6.7.8 --domain example.com
+
+Input resolution (first match wins):
+  --ip/--ips        explicit
+  --run-dir <dir>   reads <dir>/raw/ips.txt
+  stdin             one IP per line, when piped
+
+Output (under --out-dir, default <run-dir>/raw, else cwd):
+  censys-hosts.jsonl     one record per host, schema in docs/recon.md
+  censys-newnames.txt    union of in-scope cert names, one per line
+Use --stdout to write JSONL to stdout instead of files.
+
+Credentials: $CENSYS_API_KEY, or API_KEY="censys_…" in
+$RAPTOR_CENSYS_CREDENTIALS / $RAPTOR_DIR/.censys / ~/.config/raptor/censys.
+The key is never printed, logged, or written to output.
+"""
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.recon import censys as C  # noqa: E402
+
+
+def _parse_args(argv):
+    parser = argparse.ArgumentParser(
+        prog="raptor-censys",
+        description="Enrich known IPs with Censys asset data (free tier).",
+    )
+    parser.add_argument("--run-dir", type=Path,
+                        help="run/project dir; reads <dir>/raw/ips.txt")
+    parser.add_argument("--ips", type=Path,
+                        help="file with one IP per line")
+    parser.add_argument("--ip", action="append", default=[],
+                        help="explicit IP (repeatable)")
+    parser.add_argument("--domain", action="append", default=[],
+                        help="in-scope root domain (repeatable); cert names "
+                             "under it become subdomain surface")
+    parser.add_argument("--out-dir", type=Path,
+                        help="output dir (default <run-dir>/raw, else cwd)")
+    parser.add_argument("--stdout", action="store_true",
+                        help="write JSONL to stdout instead of files")
+    parser.add_argument("--delay", type=float, default=C.FREE_TIER_DELAY_SECONDS,
+                        help=f"seconds between lookups "
+                             f"(default {C.FREE_TIER_DELAY_SECONDS})")
+    parser.add_argument("--quiet", action="store_true",
+                        help="suppress the human-readable summary")
+    return parser.parse_args(argv)
+
+
+def _resolve_ips(args):
+    """Return (ips, source_label) or exit with a clear message."""
+    if args.ip:
+        return list(args.ip), "--ip"
+    if args.ips:
+        if not args.ips.is_file():
+            sys.exit(f"raptor-censys: no such file: {args.ips}")
+        return C.read_ips(args.ips), str(args.ips)
+    if args.run_dir:
+        ip_file = args.run_dir / "raw" / "ips.txt"
+        if not ip_file.is_file():
+            sys.exit(f"raptor-censys: no {ip_file} — run DNS resolution first")
+        return C.read_ips(ip_file), str(ip_file)
+    if not sys.stdin.isatty():
+        piped = [l.strip() for l in sys.stdin.read().splitlines() if l.strip()]
+        if piped:
+            return piped, "stdin"
+    sys.exit("raptor-censys: no IPs — pass --run-dir, --ips, --ip, or pipe them in")
+
+
+def _resolve_out_dir(args):
+    if args.out_dir:
+        return args.out_dir
+    if args.run_dir:
+        return args.run_dir / "raw"
+    return Path.cwd()
+
+
+def main(argv=None) -> int:
+    args = _parse_args(sys.argv[1:] if argv is None else argv)
+    ips, source = _resolve_ips(args)
+    if not ips:
+        sys.exit(f"raptor-censys: no IPs found in {source}")
+
+    try:
+        key = C.resolve_api_key()
+    except C.MissingCredential as exc:
+        # Message names the locations searched, never a key value.
+        sys.exit(f"raptor-censys: {exc}")
+
+    domains = [C.normalise_name(d) for d in args.domain if d.strip()]
+    result = C.enrich_hosts(
+        ips, domains,
+        client=C.CensysClient(key),
+        delay=args.delay,
+    )
+
+    if args.stdout:
+        for line in C.iter_jsonl(result.hosts):
+            sys.stdout.write(line)
+    else:
+        out_dir = _resolve_out_dir(args)
+        C.write_jsonl(out_dir / "censys-hosts.jsonl", result.hosts)
+        names_file = out_dir / "censys-newnames.txt"
+        names_file.parent.mkdir(parents=True, exist_ok=True)
+        names_file.write_text(
+            "".join(n + "\n" for n in result.names), encoding="utf-8")
+
+    if not args.quiet:
+        out = sys.stderr if args.stdout else sys.stdout
+        print(f"censys: looked up {len(result.hosts)}/{result.requested} hosts, "
+              f"{result.service_count} services, "
+              f"{len(result.names)} cert-derived names", file=out)
+        for host in result.hosts:
+            ports = ",".join(
+                f"{s['port']}/{(s['proto'] or '').lower()}"
+                for s in host["services"])
+            print(f"  {host['ip']:<16} {host.get('org') or '-':<22} "
+                  f"{ports or '(no services seen)'}", file=out)
+        if result.failed:
+            print(f"  ! {len(result.failed)} lookup(s) failed "
+                  f"(not found, rate-limited, or no entitlement)", file=out)
+
+    # Every requested IP failing is a real failure (bad key, blocked UA,
+    # no network) — exit non-zero so callers notice. Partial misses are
+    # normal: Censys simply hasn't seen every host.
+    return 1 if result.requested and not result.hosts else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

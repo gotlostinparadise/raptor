@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+"""Build the infrastructure-layer recon graph into a run directory.
+
+Discovers and enriches an organisation's external attack surface — apex domains,
+subdomains, IPs, ASNs/orgs, services, TLS certs, edge/WAF providers — and
+assembles it into one ``(type, id)`` merge graph. Passive discovery (crt.sh,
+Censys, subfinder) runs under every profile; active enumeration (dnsx resolve,
+naabu ports, httpx probe) runs only under a non-passive profile with an explicit
+``--active`` + ``--authorization`` attestation. ``--web`` additionally builds the
+application-layer graph from the discovered live origins in the same run dir.
+
+Usage:
+  raptor-recon example.com --out-dir <dir> --profile passive
+  raptor-recon example.com --out-dir <dir> --profile home --active --authorization "…"
+  raptor-recon --scope-file roots.txt --out-dir <dir> --profile vps --active --authorization "…" --web
+  raptor-recon --out-dir <dir> --rebuild
+
+Output (under --out-dir):
+  normalized/<kind>.jsonl   one record per line, schema in core/recon/model.py
+  graph/recon.{json,dot,graphml}
+  recon-summary.json
+  web/…                     (with --web) the app-layer graph
+
+Profiles: passive (no traffic to target) | home (rate-capped active) | vps (heavy).
+Exit codes: 0 ok, 2 usage / authorization-gate error.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.recon.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

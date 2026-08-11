@@ -46,9 +46,10 @@ class TestProject(unittest.TestCase):
             "target": self.target_code,
             "output_dir": "out/legacy",
         })
-        self.assertEqual(p.version, 3)
+        self.assertEqual(p.version, 4)
         self.assertEqual(p.threat_model_path, "")
         self.assertEqual(p.threat_model_updated, "")
+        self.assertEqual(p.recon_scope, {})
 
     def test_future_version_warns_and_clamps(self):
         with self.assertLogs("core.project.project", level="WARNING") as cm:
