@@ -17,7 +17,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
 
 from core.injection import oracles, payloads
@@ -252,6 +252,7 @@ def run_injection(
     oast=None,
     env: Optional[Dict[str, str]] = None,
     dom_xss_harness: Any = None,
+    stored_render_urls: Optional[Sequence[str]] = None,
     llm_model: Optional[str] = None,
 ) -> InjectionRun:
     out = Path(out_dir)
@@ -320,6 +321,39 @@ def run_injection(
                            timestamp=_now())
         except Exception as exc:
             run.warnings.append(f"dom-xss pass failed: {type(exc).__name__}: {exc}")
+
+    # STORED-XSS: a payload POSTed at one endpoint that executes on another page.
+    # Write points are form fields (body location); render targets default to the
+    # base page plus each distinct GET path when the orchestrator supplies none
+    # (a guestbook renders on the same page it posts to). Requires a browser.
+    if dom_xss_harness is not None and "xss" in classes:
+        write_points = [p for p in config.points if p.location == "body"]
+        if write_points:
+            render_urls = list(stored_render_urls) if stored_render_urls else None
+            if not render_urls:
+                paths = {p.path for p in config.points if p.location != "fragment"}
+                render_urls = [config.base_url] + [f"{config.base_url}{p}"
+                                                   for p in sorted(paths)]
+            try:
+                from core.injection.dom_xss import confirm_stored_xss
+
+                def _writer(point, value):
+                    run.requests_sent += 1
+                    return _send(engine, ident_name, config.base_url, point, value)
+
+                hits = confirm_stored_xss(
+                    dom_xss_harness, config.base_url, write_points, render_urls,
+                    writer=_writer, session_headers=ident.auth_headers or None,
+                    model=llm_model)
+                for hit in hits:
+                    runner._finding(run, hit["point"], "xss", "A03", M.PROOF_STATE_ORACLE,
+                                    {"payload": hit["payload"], "context": "stored-dom-executed",
+                                     "render_url": hit["render_url"]}, vulns)
+                    _fb_record(hit.get("entry", "builtin:xss-stored"), "xss",
+                               technique="stored-dom-executed", target=config.base_url,
+                               timestamp=_now())
+            except Exception as exc:
+                run.warnings.append(f"stored-xss pass failed: {type(exc).__name__}: {exc}")
 
     # poll OAST for blind confirmations
     if oast and planted:

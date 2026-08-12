@@ -229,8 +229,12 @@ def run_authz(
                 try:
                     control_obs = replay(engine, control_tmpl, t.owner)
                     owner_obs = verdict.observation(t.owner)
+                    # Compare on the volatile-normalized hash, coherent with the
+                    # owner/attacker match: otherwise a constant page carrying a
+                    # timestamp would read as "object-specific" (raw hashes differ)
+                    # and falsely confirm a public response as a break.
                     object_specific = bool(
-                        owner_obs and control_obs.body_sha256 != owner_obs.body_sha256)
+                        owner_obs and control_obs.body_norm_sha256 != owner_obs.body_norm_sha256)
                 except Exception:
                     object_specific = False
                 if not object_specific:

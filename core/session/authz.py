@@ -59,6 +59,10 @@ def vuln_record(
             "object_specific": confirmed,
             "owner": verdict.owner,
             "offending": verdict.offending,
+            # how each offending identity's body matched the owner's — "exact" or
+            # "normalized" (matched only after volatile-noise removal), so an
+            # operator can see when the diff relied on normalization.
+            "match_kinds": dict(verdict.match_kinds),
             "owner_body_sha256": base.body_sha256 if base else "",
             "observations": [
                 {"identity": o.identity, "status": o.status,

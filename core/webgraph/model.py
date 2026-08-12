@@ -86,6 +86,7 @@ PROOF_OAST_CALLBACK = "oast_callback"      # blind class: an out-of-band hit
 PROOF_AUTHZ_DIFF = "authz_diff"            # access control: A/B/unauth response diff
 PROOF_REFLECTED_MARKER = "reflected_marker"  # injection: our marker came back
 PROOF_STATE_ORACLE = "state_oracle"        # business logic/race: observed state violation
+PROOF_TOKEN_FORGED = "token_forged"        # auth: a forged JWT the server accepted (A/B oracle)
 PROOF_NONE = ""                            # unverified (suspected only)
 
 
@@ -283,7 +284,7 @@ __all__ = [
     # finding vocabulary
     "STATUS_CONFIRMED", "STATUS_SUSPECTED", "STATUS_RULED_OUT",
     "PROOF_OAST_CALLBACK", "PROOF_AUTHZ_DIFF", "PROOF_REFLECTED_MARKER",
-    "PROOF_STATE_ORACLE", "PROOF_NONE",
+    "PROOF_STATE_ORACLE", "PROOF_TOKEN_FORGED", "PROOF_NONE",
     # records
     "Record", "OriginRecord", "PageRecord", "FormRecord", "EndpointRecord",
     "ParamRecord", "IdentityRecord", "RequestRecord", "VulnRecord",

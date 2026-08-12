@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""JWT forgery testing — alg:none + weak-secret HMAC, forged-token-accepted oracle.
+
+Confirms a JWT signature bypass mechanically: it forges a token (an alg:none
+"unsecured" JWS, or a token re-signed with a brute-forced weak HMAC secret) with a
+tampered claim, then proves the server accepted it via an A/B/control oracle — the
+real token is accepted, a corrupted-signature token is REJECTED (so the endpoint
+does validate), and our forgery is accepted. Only then is it a finding
+(PROOF_TOKEN_FORGED, CWE-347). An endpoint that accepts anything is reported as
+broken auth, not a forgery.
+
+SAFE BY DEFAULT: no request is sent unless --active is passed AND the config
+declares a non-empty `authorization`.
+
+Usage:
+  raptor-jwt --out-dir <dir> --url https://api.example.com --token <JWT>          (dry-run)
+  raptor-jwt --out-dir <dir> --url https://api.x --protected-path /rest/user/whoami \
+             --token-env JWT --tamper '{"role":"admin"}' --authorization Y --active
+  raptor-jwt --out-dir <dir> --config jwt.json --active
+
+Exit codes: 0 ok, 2 usage / gate error.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.jwt.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())
