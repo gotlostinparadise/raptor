@@ -56,6 +56,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--union", action="store_true",
                    help="escalate a confirmed SQLi to reflection-proof UNION data extraction "
                         "(read-only: schema/version, and on a real dump the leaked rows)")
+    p.add_argument("--union-extract", action="append", default=[],
+                   help="operator-declared scalar SELECT to dump via UNION on a confirmed SQLi "
+                        "(repeatable), e.g. 'SELECT group_concat(email) FROM Users'; implies --union")
     p.add_argument("--stdout", action="store_true")
     return p
 
@@ -145,6 +148,9 @@ def _load(args) -> InjectionConfig:
     if getattr(args, "chain_rounds", 0):
         cfg.chain_rounds = args.chain_rounds
     if getattr(args, "union", False):
+        cfg.union = True
+    if getattr(args, "union_extract", None):
+        cfg.union_extract = list(args.union_extract)
         cfg.union = True
     return cfg
 

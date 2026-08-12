@@ -75,6 +75,10 @@ class InjectionConfig:
     # (schema/version, and on a real dump the leaked rows) via a reflection-proof
     # UNION SELECT; the extracted data feeds T3 chaining.
     union: bool = False
+    # Operator-declared scalar SELECT fragments to dump via UNION on a confirmed
+    # SQLi (e.g. "SELECT group_concat(email) FROM Users"). Opt-in, authorized
+    # data extraction — empty by default. Implies union.
+    union_extract: List[str] = field(default_factory=list)
 
     def enabled_classes(self, *, have_oast: bool) -> List[str]:
         out = [c for c in self.classes if c in ALL_CLASSES]
@@ -109,7 +113,8 @@ def from_dict(data: Mapping[str, Any]) -> InjectionConfig:
         adapt_steps=int(data.get("adapt_steps", 0) or 0),
         chain=bool(data.get("chain", False)),
         chain_rounds=int(data.get("chain_rounds", 2) or 2),
-        union=bool(data.get("union", False)),
+        union=bool(data.get("union", False)) or bool(data.get("union_extract")),
+        union_extract=list(data.get("union_extract") or []),
     )
 
 

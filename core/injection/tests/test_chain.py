@@ -185,3 +185,27 @@ def test_derive_identities_from_tokens():
     idents = derive_identities(arts)
     assert len(idents) == 2                      # de-duplicated
     assert all(tok.startswith("eyJ") for _name, tok in idents)
+
+
+# ── N6: chained surface persistence ──────────────────────────────────
+
+def test_chained_surface_is_persisted_to_normalized(tmp_path):
+    run = run_injection(_cfg(chain=True), out_dir=tmp_path, active=True,
+                        client_factory=_two_step_app())
+    # the leaked endpoint is persisted as endpoint+param records so the
+    # orchestrator fixpoint can re-test it across the OTHER phases too.
+    eps = (tmp_path / "normalized" / "endpoints.jsonl").read_text(encoding="utf-8")
+    params = (tmp_path / "normalized" / "parameters.jsonl").read_text(encoding="utf-8")
+    assert "/rest/admin/secret" in eps and "/rest/admin/secret" in params
+    assert run.chain and run.chain.get("persisted_endpoints", 0) >= 1
+
+
+def test_persist_chained_surface_merges_and_dedupes(tmp_path):
+    from core.injection.chain import persist_chained_surface
+    from core.injection.config import InjectionPoint
+    nd = tmp_path / "normalized"
+    nd.mkdir()
+    pts = [InjectionPoint("GET", "/a", "id", "query"),
+           InjectionPoint("GET", "/a", "id", "query")]   # duplicate
+    assert persist_chained_surface(nd, pts, "http://t") == 1   # deduped to one
+    assert persist_chained_surface(nd, pts, "http://t") == 0   # already present
