@@ -21,6 +21,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
 
 from core.injection import oracles, payloads
+from core.injection.budget import HostHealth, InjectionHalt, RequestBudget
 from core.payloads.feedback import record_confirmed as _fb_record
 from core.injection.config import InjectionConfig, InjectionPoint
 from core.injection.markers import MarkerFactory
@@ -52,15 +53,19 @@ class InjectionRun:
     requests_sent: int = 0
     node_count: int = 0
     edge_count: int = 0
+    triage: Optional[Dict[str, Any]] = None   # T1 triage plan summary (None = full sweep)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "out_dir": self.out_dir, "base_url": self.base_url, "active": self.active,
             "points": self.points, "classes": self.classes,
             "finding_count": len(self.findings), "findings": self.findings,
             "warnings": self.warnings, "requests_sent": self.requests_sent,
             "node_count": self.node_count, "edge_count": self.edge_count,
         }
+        if self.triage is not None:
+            d["triage"] = self.triage
+        return d
 
 
 def _with_query(url: str, param: str, value: str) -> str:
@@ -101,17 +106,49 @@ def _body_text(resp) -> str:
 
 
 class InjectionRunner:
-    def __init__(self, engine, *, identity: str = _TESTER, oast=None, llm_model=None) -> None:
+    def __init__(self, engine, *, identity: str = _TESTER, oast=None, llm_model=None,
+                 budget=None, health=None) -> None:
         self.engine = engine
         self.identity_name = identity   # session identity to inject as
         self.oast = oast
         self.llm_model = llm_model   # enables the LLM proposer (None = mechanical)
+        # T1 guards (both optional; None = today's unbounded, un-gated behaviour).
+        self.budget = budget         # RequestBudget — hard cap on requests sent
+        self.health = health         # HostHealth — connection-error circuit breaker
+        self.halted: Optional[str] = None   # set when a guard stops the phase
         self._markers = MarkerFactory()
         self._n = 0
 
     def _vid(self) -> str:
         self._n += 1
         return f"INJ-{self._n:04d}"
+
+    def _dispatch(self, run, thunk):
+        """Send one request through the T1 guards, then feed the health tracker.
+
+        The single chokepoint every send routes through: fail-fast if the target
+        is down or the budget is spent (raising an ``InjectionHalt`` the loop
+        catches to stop the phase), count the request, send it, and record the
+        response status against the connection-error breaker. ``thunk`` performs
+        the actual ``_send`` and returns the :class:`~core.http.Response`.
+        """
+        if self.health is not None:
+            try:
+                self.health.check()
+            except Exception as exc:
+                self.halted = str(exc)
+                raise
+        if self.budget is not None:
+            try:
+                self.budget.charge()
+            except Exception as exc:
+                self.halted = str(exc)
+                raise
+        run.requests_sent += 1
+        resp = thunk()
+        if self.health is not None:
+            self.health.observe(int(getattr(resp, "status", 0) or 0))
+        return resp
 
     def _finding(self, run, point, vuln_class, owasp, proof_kind, evidence, vulns):
         vid = self._vid()
@@ -137,8 +174,8 @@ class InjectionRunner:
         eng, base = self.engine, run.base_url
 
         def send(pl):
-            run.requests_sent += 1
-            return _send(eng, self.identity_name, base, point, pl)
+            return self._dispatch(
+                run, lambda: _send(eng, self.identity_name, base, point, pl))
 
         if "ssti" in classes:
             for pl, expected in payloads.ssti(self._markers.next()):
@@ -227,8 +264,8 @@ class InjectionRunner:
             c = self.oast.new_interaction(finding_id=fid)
             planted[c.finding_id] = {"class": vuln_class, "endpoint_id": eid,
                                      "param": point.param}
-            run.requests_sent += 1
-            _send(eng, self.identity_name, base, point, build(c.host))
+            self._dispatch(
+                run, lambda: _send(eng, self.identity_name, base, point, build(c.host)))
 
         if "ssrf" in classes:
             plant("ssrf", lambda h: f"http://{h}/")
@@ -267,6 +304,28 @@ def run_injection(
     run = InjectionRun(out_dir=str(out), base_url=config.base_url, active=active,
                        points=len(config.points), classes=classes)
 
+    # T1 — triage the (point, class) sweep and bound the run. Triage engages
+    # when a model is configured, a request budget is set, or it is asked for
+    # explicitly; otherwise the historical full sweep runs unchanged.
+    request_budget = getattr(config, "request_budget", None)
+    triage_on = (bool(llm_model) or bool(request_budget)
+                 or bool(getattr(config, "triage", False)))
+    plan = None
+    if triage_on and config.points:
+        from core.injection.triage import triage_points
+        try:
+            plan = triage_points(
+                config.points, classes, llm_model=llm_model,
+                target=config.base_url,
+                max_pairs=(getattr(config, "triage_max_pairs", 0) or None))
+            run.triage = plan.to_dict()
+            (out / "injection-triage.json").write_text(
+                json.dumps(run.triage, indent=2), encoding="utf-8")
+        except Exception as exc:
+            run.warnings.append(
+                f"triage failed ({type(exc).__name__}: {exc}); full sweep used")
+            plan = None
+
     if active:
         if profile == "passive":
             raise ValueError("active injection cannot use the passive profile")
@@ -277,8 +336,13 @@ def run_injection(
             )
 
     if not active:
-        run.findings = [{"point": p.label, "classes": classes, "planned": True}
-                        for p in config.points]
+        if plan is not None:
+            run.findings = [{"point": p.label, "classes": plan.classes_for(p),
+                             "planned": True}
+                            for p in plan.ordered_points(config.points)]
+        else:
+            run.findings = [{"point": p.label, "classes": classes, "planned": True}
+                            for p in config.points]
         _finalize(out, run, {})
         return run
 
@@ -294,23 +358,43 @@ def run_injection(
     run.warnings.extend(warns)
     ident = engine.identity(ident_name)
 
-    runner = InjectionRunner(engine, identity=ident_name, oast=oast, llm_model=llm_model)
+    # T1 guards: a hard request budget and a connection-error circuit breaker so
+    # the run can be bounded and a crashed target is detected (both no-ops when a
+    # full sweep is running unbounded). Health tracking rides along whenever the
+    # run is triaged or budgeted.
+    budget = RequestBudget(limit=request_budget) if request_budget else None
+    health = (HostHealth.for_url(config.base_url)
+              if (plan is not None or budget is not None) else None)
+
+    runner = InjectionRunner(engine, identity=ident_name, oast=oast,
+                             llm_model=llm_model, budget=budget, health=health)
     vulns: List[Dict[str, Any]] = []
     planted: Dict[str, Dict[str, str]] = {}
-    for point in config.points:
+    # Walk points in triage-priority order (best pairs first) so a request budget
+    # is spent where it matters; without a plan, the full mapped surface is walked.
+    iter_points = (plan.ordered_points(config.points)
+                   if plan is not None else list(config.points))
+    for point in iter_points:
         # A fragment (SPA hash-route) param is client-side only — it never
         # reaches the server, so no HTTP in-band/blind oracle can see it. It is
         # tested exclusively by the DOM-XSS oracle below.
         if point.location == "fragment":
             continue
+        selected = plan.classes_for(point) if plan is not None else classes
+        if not selected:
+            continue
         try:
-            runner._inband(run, point, classes, vulns)
-            planted.update(runner._blind(run, point, classes))
+            runner._inband(run, point, selected, vulns)
+            planted.update(runner._blind(run, point, selected))
+        except InjectionHalt as halt:
+            # Budget spent or target down — stop the phase, don't just skip a point.
+            run.warnings.append(f"injection halted early: {halt}")
+            break
         except Exception as exc:
             run.warnings.append(f"{point.label}: {type(exc).__name__}: {exc}")
 
     # DOM-XSS: confirm execution in a real browser (SPA XSS the HTTP oracle misses)
-    if dom_xss_harness is not None and "xss" in classes:
+    if dom_xss_harness is not None and "xss" in classes and runner.halted is None:
         try:
             from core.injection.dom_xss import confirm_dom_xss
             hits = confirm_dom_xss(dom_xss_harness, config.base_url, config.points,
@@ -331,7 +415,7 @@ def run_injection(
     # Write points are form fields (body location); render targets default to the
     # base page plus each distinct GET path when the orchestrator supplies none
     # (a guestbook renders on the same page it posts to). Requires a browser.
-    if dom_xss_harness is not None and "xss" in classes:
+    if dom_xss_harness is not None and "xss" in classes and runner.halted is None:
         write_points = [p for p in config.points if p.location == "body"]
         if write_points:
             render_urls = list(stored_render_urls) if stored_render_urls else None
@@ -343,8 +427,9 @@ def run_injection(
                 from core.injection.dom_xss import confirm_stored_xss
 
                 def _writer(point, value):
-                    run.requests_sent += 1
-                    return _send(engine, ident_name, config.base_url, point, value)
+                    return runner._dispatch(
+                        run,
+                        lambda: _send(engine, ident_name, config.base_url, point, value))
 
                 hits = confirm_stored_xss(
                     dom_xss_harness, config.base_url, write_points, render_urls,
