@@ -38,6 +38,11 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="also run the DOM-XSS oracle in a real browser (needs Playwright/Chromium)")
     p.add_argument("--llm-model", default="",
                    help="model driving the XSS proposer / DOM-XSS pass (mechanical when unset)")
+    p.add_argument("--budget", type=int, default=0,
+                   help="cap total requests sent (0 = unbounded); triages the sweep and "
+                        "spends the budget on the highest-priority (point, class) pairs first")
+    p.add_argument("--triage", action="store_true",
+                   help="run the mechanical (point, class) pre-score even without a model/budget")
     p.add_argument("--stdout", action="store_true")
     return p
 
@@ -114,6 +119,10 @@ def _load(args) -> InjectionConfig:
         cfg.classes = [c.strip() for c in args.classes.split(",") if c.strip()]
     if args.token_env:
         cfg.token_env = args.token_env
+    if getattr(args, "budget", 0):
+        cfg.request_budget = args.budget
+    if getattr(args, "triage", False):
+        cfg.triage = True
     return cfg
 
 

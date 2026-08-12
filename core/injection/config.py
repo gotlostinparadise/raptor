@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Mapping
+from typing import Any, Dict, List, Mapping, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 # The vuln classes the runner knows how to test.
@@ -54,6 +54,13 @@ class InjectionConfig:
     cookies: Dict[str, str] = field(default_factory=dict)
     headers: Dict[str, str] = field(default_factory=dict)
     session: Any = field(default=None, repr=False, compare=False)
+    # T1 — triage + budget. ``request_budget`` caps how many HTTP requests the
+    # run may send (None = unbounded); ``triage`` forces the mechanical pre-score
+    # even with no model/budget; ``triage_max_pairs`` is an optional explicit hard
+    # cap on selected (point, class) pairs (0 = no cap — the budget bounds it).
+    request_budget: Optional[int] = None
+    triage: bool = False
+    triage_max_pairs: int = 0
 
     def enabled_classes(self, *, have_oast: bool) -> List[str]:
         out = [c for c in self.classes if c in ALL_CLASSES]
@@ -76,10 +83,14 @@ def from_dict(data: Mapping[str, Any]) -> InjectionConfig:
         raise ValueError("injection config requires a base_url")
     points = [_point_from(p) for p in (data.get("points") or [])]
     classes = list(data.get("classes") or ALL_CLASSES)
+    budget = data.get("request_budget")
     return InjectionConfig(
         base_url=base_url, points=points, classes=classes,
         authorization=data.get("authorization", ""), token_env=data.get("token_env", ""),
         cookies=dict(data.get("cookies") or {}), headers=dict(data.get("headers") or {}),
+        request_budget=int(budget) if budget else None,
+        triage=bool(data.get("triage", False)),
+        triage_max_pairs=int(data.get("triage_max_pairs", 0) or 0),
     )
 
 
