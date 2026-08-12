@@ -7,7 +7,8 @@ oracle still confirms every chained finding.
 import re
 from urllib.parse import unquote
 
-from core.injection.chain import ChainArtifacts, derive_points, extract_artifacts
+from core.injection.chain import (
+    ChainArtifacts, derive_identities, derive_points, extract_artifacts)
 from core.injection.config import from_dict
 from core.injection.runner import run_injection
 from core.session.tests.fakes import FakeClient, resp
@@ -134,3 +135,53 @@ def test_chain_off_by_default_does_not_reach_step_two(tmp_path):
 def test_config_chain_round_trips():
     cfg = from_dict({"base_url": "https://x", "chain": True, "chain_rounds": 3})
     assert cfg.chain is True and cfg.chain_rounds == 3
+
+
+# ── N2: token → identity escalation ──────────────────────────────────
+
+_TOKEN = "eyJhbGci.eyJhZG1p.SIGvalue123"
+
+
+def _token_escalation_app():
+    """Finding A (SSTI on /start) leaks a JWT + an admin endpoint; /rest/admin/vault
+    is injectable ONLY when replayed as the leaked bearer identity (else 401)."""
+    def h(method, url, headers, body):
+        blob = _blob(url, body)
+        auth = headers.get("Authorization", "")
+        if "/start" in url:
+            ev = re.sub(r"\{\{(\d+)\*(\d+)\}\}",
+                        lambda m: str(int(m.group(1)) * int(m.group(2))), blob)
+            return resp(200, body=(ev + f"  token={_TOKEN}  next: /rest/admin/vault").encode())
+        if "/rest/admin/vault" in url:
+            if f"Bearer {_TOKEN}" not in auth:
+                return resp(401, body=b"unauthorized")
+            if "'" in blob:
+                return resp(500, body=b"SQLITE_ERROR: near syntax error")
+            return resp(200, body=b"vault")
+        return resp(200, body=b"nope")
+    return lambda hosts: FakeClient(h)
+
+
+def _start_cfg():
+    return from_dict({"base_url": "https://app.test", "authorization": _AUTH,
+                      "points": [{"method": "GET", "path": "/start", "param": "q",
+                                  "location": "query"}],
+                      "classes": ["ssti", "sqli"], "chain": True})
+
+
+def test_leaked_token_becomes_identity_and_unlocks_step_two(tmp_path):
+    run = run_injection(_start_cfg(), out_dir=tmp_path, active=True,
+                        client_factory=_token_escalation_app())
+    # B (sqli on the admin endpoint) confirms ONLY because the leaked token was
+    # registered as an identity and replayed — the anonymous tester gets 401.
+    assert any(f["class"] == "sqli" and "/rest/admin/vault" in f["point"]
+               for f in run.findings)
+    assert run.chain is not None
+    assert any(rnd.get("new_identities") for rnd in run.chain["rounds"])
+
+
+def test_derive_identities_from_tokens():
+    arts = ChainArtifacts(tokens=[_TOKEN, _TOKEN, "eyJx.eyJy.SIGzz99"])
+    idents = derive_identities(arts)
+    assert len(idents) == 2                      # de-duplicated
+    assert all(tok.startswith("eyJ") for _name, tok in idents)

@@ -189,4 +189,21 @@ def _llm_select(points: List[InjectionPoint], artifacts: ChainArtifacts,
     return ordered
 
 
-__all__ = ["ChainArtifacts", "extract_artifacts", "derive_points"]
+def derive_identities(artifacts: ChainArtifacts) -> List[tuple]:
+    """Leaked JWT/bearer tokens → ``(identity_name, token)`` pairs (N2).
+
+    A token dumped or reflected by a confirmed finding is a credential the run can
+    replay: registered as a new session identity, it lets the chainer re-test the
+    derived surface *as the escalated actor* (a leaked admin token unlocks
+    admin-only surface). De-duplicated; names are stable per token.
+    """
+    out: List[tuple] = []
+    seen: Set[str] = set()
+    for i, tok in enumerate(artifacts.tokens, 1):
+        if tok and tok not in seen:
+            seen.add(tok)
+            out.append((f"chained-token-{i}", tok))
+    return out
+
+
+__all__ = ["ChainArtifacts", "extract_artifacts", "derive_points", "derive_identities"]

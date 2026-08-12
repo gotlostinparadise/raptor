@@ -71,6 +71,10 @@ class InjectionConfig:
     # ``chain_rounds`` bounds how many finding→surface→retest hops to follow.
     chain: bool = False
     chain_rounds: int = 2
+    # N1 — UNION extraction. When a point's SQLi is confirmed, pull read-only data
+    # (schema/version, and on a real dump the leaked rows) via a reflection-proof
+    # UNION SELECT; the extracted data feeds T3 chaining.
+    union: bool = False
 
     def enabled_classes(self, *, have_oast: bool) -> List[str]:
         out = [c for c in self.classes if c in ALL_CLASSES]
@@ -105,6 +109,7 @@ def from_dict(data: Mapping[str, Any]) -> InjectionConfig:
         adapt_steps=int(data.get("adapt_steps", 0) or 0),
         chain=bool(data.get("chain", False)),
         chain_rounds=int(data.get("chain_rounds", 2) or 2),
+        union=bool(data.get("union", False)),
     )
 
 
