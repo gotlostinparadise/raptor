@@ -13,6 +13,13 @@ class DiscoveryConfig:
     base_url: str
     authorization: str = ""
     probe_exposed: bool = True
+    # Q5: attach a curated common-param wordlist to bare-path endpoints (those
+    # mined with no observed query params) so they become injectable — a
+    # server-rendered/REST path with no visible params is otherwise a dead end
+    # for `/inject`. Capped to keep the graph and the downstream request budget
+    # bounded on JS-heavy apps; the emitted params carry source="discovery-wordlist".
+    param_wordlist: bool = True
+    param_wordlist_cap: int = 40
     # Shared authenticated session (see core.session.attach).
     cookies: Dict[str, str] = field(default_factory=dict)
     headers: Dict[str, str] = field(default_factory=dict)
@@ -26,6 +33,8 @@ def from_dict(data: Mapping[str, Any]) -> DiscoveryConfig:
     return DiscoveryConfig(
         base_url=base_url, authorization=data.get("authorization", ""),
         probe_exposed=bool(data.get("probe_exposed", True)),
+        param_wordlist=bool(data.get("param_wordlist", True)),
+        param_wordlist_cap=int(data.get("param_wordlist_cap", 40)),
         cookies=dict(data.get("cookies") or {}), headers=dict(data.get("headers") or {}),
     )
 

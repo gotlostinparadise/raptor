@@ -17,6 +17,29 @@ from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import parse_qsl, urljoin, urlsplit
 
 from core.discovery import extractors, probes
+
+# Q5: high-signal parameter names attached to bare-path endpoints so a path with
+# no observed query params still becomes injectable. Curated for spread across
+# the injection classes — id/q/search/name/user (SQLi), file/path/dir/lang
+# (LFI/traversal), url/redirect/next/callback (SSRF/open-redirect) — kept tight
+# so the speculative fan-out stays bounded. Downstream injection is oracle-gated,
+# so a wrong guess costs requests, never a false confirmation.
+_COMMON_PARAMS = (
+    "id", "page", "q", "search", "query", "name", "user", "file", "path",
+    "dir", "lang", "url", "redirect", "next", "callback", "cat",
+)
+
+# Static assets never carry injectable query params — skip them so the wordlist
+# budget spends on real endpoints.
+_ASSET_EXT = (
+    ".js", ".mjs", ".css", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+    ".ico", ".woff", ".woff2", ".ttf", ".eot", ".webp", ".avif", ".mp4",
+    ".webm", ".pdf",
+)
+
+
+def _is_asset(path: str) -> bool:
+    return path.lower().rsplit("?", 1)[0].endswith(_ASSET_EXT)
 from core.discovery.config import DiscoveryConfig
 from core.http import HttpError, Response
 from core.webgraph import model as M
@@ -108,6 +131,8 @@ def run_discovery(
     recs: Dict[str, List[Dict[str, Any]]] = {}
     vulns: List[Dict[str, Any]] = []
     n = [0]
+    wl = [0]                      # count of bare-path endpoints given wordlist params
+    wl_seen: set = set()          # endpoint ids already augmented (dedup)
 
     def add_rec(rec):
         recs.setdefault(rec.KIND, []).append(rec.to_row())
@@ -132,10 +157,25 @@ def run_discovery(
             eid = endpoint_id("GET", path)
             add_rec(M.EndpointRecord(method="GET", path=path, origin=ep_origin or origin,
                                      source="discovery"))
+            observed = 0
             for pname, _pval in parse_qsl(parts.query, keep_blank_values=True):
                 if pname:
+                    observed += 1
                     add_rec(M.ParamRecord(endpoint_id=eid, name=pname,
                                           location=M.LOC_QUERY, source="discovery"))
+            # Q5: a same-origin, non-asset path mined with NO observed params gets
+            # the common-param wordlist so `/inject` has something to test. Bounded
+            # by param_wordlist_cap; deduped per endpoint; tagged for auditability.
+            if (config.param_wordlist and observed == 0
+                    and (not ep_origin or ep_origin == origin)
+                    and not _is_asset(path) and eid not in wl_seen
+                    and wl[0] < config.param_wordlist_cap):
+                wl_seen.add(eid)
+                wl[0] += 1
+                for pname in _COMMON_PARAMS:
+                    add_rec(M.ParamRecord(endpoint_id=eid, name=pname,
+                                          location=M.LOC_QUERY,
+                                          source="discovery-wordlist"))
             run.endpoints_found += 1
         for sec in extractors.extract_secrets(text):
             run.secrets_found += 1
