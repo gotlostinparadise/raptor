@@ -164,6 +164,24 @@ def test_blind_ssrf_via_oast(tmp_path):
                for f in run.findings)
 
 
+def test_blind_rfi_via_oast(tmp_path):
+    # RFI: a file-include param that fetches a remote URL calls home → oast_callback,
+    # classified rfi (CWE-98). Same proof plumbing as SSRF, distinct class.
+    backend = InMemoryBackend("oast.test")
+    oast = OastClient(backend)
+
+    def h(method, url, headers, body):
+        m = re.search(r"([a-z0-9]+\.oast\.test)", _blob(url, body))
+        if m:
+            backend.record(Interaction(token="", protocol=PROTO_DNS, host=m.group(1)))
+        return resp(200, body=b"included")
+
+    run = run_injection(_cfg(["rfi"]), out_dir=tmp_path, active=True,
+                        client_factory=lambda hosts: FakeClient(h), oast=oast)
+    assert any(f.get("proof") == "oast_callback" and f["class"] == "rfi"
+               for f in run.findings)
+
+
 def _cookie_echo_app(seen):
     """Records the Cookie header on every request; never confirms a finding."""
     def h(method, url, headers, body):

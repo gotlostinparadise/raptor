@@ -54,6 +54,11 @@ _CWE_BY_CLASS: Dict[str, str] = {
     "limit_bypass": "CWE-770",
     # auth / JWT
     "jwt_forgery": "CWE-347", "jwt_alg_none": "CWE-347", "jwt_weak_secret": "CWE-347",
+    # session / auth breadth (M4 S5 set)
+    "weak_session_id": "CWE-330", "predictable_session_id": "CWE-330",
+    "session_id_reuse": "CWE-384",
+    "no_bruteforce_protection": "CWE-307", "no_rate_limit": "CWE-307",
+    "csrf": "CWE-352", "unrestricted_file_upload": "CWE-434", "rfi": "CWE-98",
 }
 _DEFAULT_CWE = "CWE-0"
 
@@ -64,6 +69,7 @@ _EVIDENCE_TYPE: Dict[str, str] = {
     M.PROOF_REFLECTED_MARKER: "reflected_marker",
     M.PROOF_STATE_ORACLE: "state_oracle",
     M.PROOF_TOKEN_FORGED: "token_forged",
+    M.PROOF_TOKEN_ANALYSIS: "token_analysis",
 }
 
 

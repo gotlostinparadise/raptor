@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""Unrestricted file-upload testing — upload a marker file, retrieve it, verdict.
+
+Uploads a dangerous-extension file whose body echoes a token-wrapped arithmetic
+product, discovers where it landed (parsed from the response, an operator
+template, or common upload prefixes), reads it back, and confirms: EXECUTED (the
+computed product is returned — code execution) or RETRIEVABLE (source served
+verbatim — stored + reachable). Either is a confirmed unrestricted upload
+(CWE-434, PROOF_REFLECTED_MARKER). The payload is benign (echoes a number).
+
+SAFE BY DEFAULT: no upload unless --active AND a non-empty `authorization`.
+
+Usage:
+  raptor-fileupload --out-dir <dir> --url http://dvwa --upload-url /vulnerabilities/upload/ \
+       --retrieve-template '/hackable/uploads/{filename}' --authorization Y --active
+
+Exit codes: 0 ok, 2 usage / gate error.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.fileupload.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

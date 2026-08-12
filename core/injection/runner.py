@@ -238,6 +238,11 @@ class InjectionRunner:
             plant("cmdi_blind", lambda h: f"; curl http://{h}/")
         if "sqli_oob" in classes:
             plant("sqli_oob", lambda h: payloads.sqli_oob(h)[0])
+        if "rfi" in classes:
+            # Remote File Inclusion: a file-include param fetching a remote URL
+            # calls home — same OAST callback proof as SSRF, but classified rfi
+            # (CWE-98). ?page=http://oast/… is the classic DVWA/PHP include case.
+            plant("rfi", lambda h: f"http://{h}/rfi.txt")
         return planted
 
 

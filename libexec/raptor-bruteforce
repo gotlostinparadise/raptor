@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""Brute-force / rate-limit weakness testing — no-lockout counting oracle.
+
+Fires N FAILED authentication attempts (wrong credentials the operator supplies,
+so no account is accessed) and checks whether the target ever locks out or
+throttles (HTTP 429 or a lockout/CAPTCHA body signature). N identically-processed
+failures with no lockout is a confirmed absence of brute-force protection
+(PROOF_STATE_ORACLE, CWE-307) — the finding records the exact tested threshold N,
+so the claim is precisely "no lockout within N". If a lockout kicks in at attempt
+K, protection exists and K is reported.
+
+SAFE BY DEFAULT: no request is sent unless --active AND a non-empty `authorization`.
+
+Usage:
+  raptor-bruteforce --out-dir <dir> --url https://x --login-url /rest/user/login \
+       --body '{"email":"a@b.c","password":"wrong"}' --json-body --attempts 15 \
+       --authorization Y --active
+
+Exit codes: 0 ok, 2 usage / gate error.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.bruteforce.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())
