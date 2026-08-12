@@ -54,6 +54,7 @@ class InjectionRun:
     node_count: int = 0
     edge_count: int = 0
     triage: Optional[Dict[str, Any]] = None   # T1 triage plan summary (None = full sweep)
+    chain: Optional[Dict[str, Any]] = None    # T3 chaining log (None = no chaining)
 
     def to_dict(self) -> Dict[str, Any]:
         d = {
@@ -65,6 +66,8 @@ class InjectionRun:
         }
         if self.triage is not None:
             d["triage"] = self.triage
+        if self.chain is not None:
+            d["chain"] = self.chain
         return d
 
 
@@ -163,8 +166,14 @@ class InjectionRunner:
             status=M.STATUS_CONFIRMED, proof_kind=proof_kind, evidence=evidence,
             source="injection",
         ).to_row())
-        run.findings.append({"id": vid, "class": vuln_class, "point": point.label,
-                             "proof": proof_kind})
+        entry = {"id": vid, "class": vuln_class, "point": point.label,
+                 "proof": proof_kind}
+        # T3: keep a bounded excerpt of the confirming response so the chainer can
+        # mine it for leaked endpoints / tokens / object ids.
+        excerpt = (evidence.get("response_excerpt") or "")[:800]
+        if excerpt:
+            entry["excerpt"] = excerpt
+        run.findings.append(entry)
         # Flywheel: remember every confirmed vector for cross-run learning. XSS
         # records its exact catalog id in the xss branch (proposer-relevant); the
         # generator-based classes have no catalog id yet, so log a builtin marker
@@ -200,7 +209,8 @@ class InjectionRunner:
                                evade=self.adapt, reorder=_reorder("ssti"))
             if hit:
                 self._finding(run, point, "ssti", "API8", M.PROOF_REFLECTED_MARKER,
-                              {"payload": hit["payload"], "marker": hit["expected"]}, vulns)
+                              {"payload": hit["payload"], "marker": hit["expected"],
+                               "response_excerpt": hit.get("excerpt", "")}, vulns)
         if "cmdi" in classes:
             # expected is the COMPUTED product — reflection can't match it
             hit = adaptive_try(payloads.cmdi(self._markers.next()), send,
@@ -208,7 +218,8 @@ class InjectionRunner:
                                evade=self.adapt, reorder=_reorder("cmdi"))
             if hit:
                 self._finding(run, point, "cmdi", "API8", M.PROOF_REFLECTED_MARKER,
-                              {"payload": hit["payload"], "marker": hit["expected"]}, vulns)
+                              {"payload": hit["payload"], "marker": hit["expected"],
+                               "response_excerpt": hit.get("excerpt", "")}, vulns)
         if "sqli" in classes:
             hit = False
             _db = {}
@@ -226,7 +237,8 @@ class InjectionRunner:
             if e_hit:
                 self._finding(run, point, "sqli", "API8", M.PROOF_REFLECTED_MARKER,
                               {"payload": e_hit["payload"], "db": _db.get("db"),
-                               "method": "error"}, vulns)
+                               "method": "error",
+                               "response_excerpt": e_hit.get("excerpt", "")}, vulns)
                 hit = True
             if not hit:
                 baseline = send("1")
@@ -250,7 +262,8 @@ class InjectionRunner:
             if hit:
                 self._finding(run, point, "path_traversal", "API8",
                               M.PROOF_REFLECTED_MARKER,
-                              {"payload": hit["payload"]}, vulns)
+                              {"payload": hit["payload"],
+                               "response_excerpt": hit.get("excerpt", "")}, vulns)
         if "xss" in classes:
             from core.payloads import default_store, detect_context, propose, record_confirmed
             m = self._markers.next()
@@ -278,7 +291,8 @@ class InjectionRunner:
                                reorder=_reorder("ssrf_metadata"))
             if hit:
                 self._finding(run, point, "ssrf", "API7", M.PROOF_REFLECTED_MARKER,
-                              {"payload": hit["payload"], "method": "metadata"}, vulns)
+                              {"payload": hit["payload"], "method": "metadata",
+                               "response_excerpt": hit.get("excerpt", "")}, vulns)
 
     def _blind(self, run, point, classes) -> Dict[str, Dict[str, str]]:
         """Plant OAST payloads; return ``{finding_id: {class, endpoint_id, param}}``.
@@ -479,6 +493,47 @@ def run_injection(
                                timestamp=_now())
             except Exception as exc:
                 run.warnings.append(f"stored-xss pass failed: {type(exc).__name__}: {exc}")
+
+    # ─────────────── T3: chain confirmed findings into new surface ───────────────
+    # A confirmed finding whose response leaked a new endpoint / token / object id
+    # becomes fresh surface the runner tests in the same run — so a two-step
+    # challenge (A yields the artifact that unlocks B) resolves without a re-run.
+    # LLM-directed when a model is set; the oracle still confirms B. Bounded by the
+    # request budget (via _dispatch) and a chain-round cap.
+    if getattr(config, "chain", False) and runner.halted is None:
+        from core.injection.chain import derive_points, extract_artifacts
+        chain_rounds = int(getattr(config, "chain_rounds", 2) or 2)
+        tested = {p.label for p in config.points}
+        chain_log: List[Dict[str, Any]] = []
+        for cround in range(1, chain_rounds + 1):
+            arts = extract_artifacts(run.findings, base_url=config.base_url)
+            new_points = derive_points(arts, tested, llm_model=llm_model,
+                                       target=config.base_url)
+            if not new_points:
+                break
+            chain_log.append({"round": cround, "artifacts": arts.to_dict(),
+                              "new_points": [p.label for p in new_points]})
+            run.warnings.append(
+                f"[chain r{cround}] {len(new_points)} new point(s) from "
+                f"{len(arts.endpoints)} leaked endpoint(s)")
+            stop = False
+            for p in new_points:
+                tested.add(p.label)
+                if p.location == "fragment":
+                    continue
+                try:
+                    runner._inband(run, p, classes, vulns)
+                    planted.update(runner._blind(run, p, classes))
+                except InjectionHalt as halt:
+                    run.warnings.append(f"chain halted early: {halt}")
+                    stop = True
+                    break
+                except Exception as exc:
+                    run.warnings.append(f"{p.label}: {type(exc).__name__}: {exc}")
+            if stop:
+                break
+        if chain_log:
+            run.chain = {"rounds": chain_log}
 
     # poll OAST for blind confirmations
     if oast and planted:

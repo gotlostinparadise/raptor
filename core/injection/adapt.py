@@ -113,7 +113,8 @@ def adaptive_try(
         resp = send(payload)
         used += 1
         if matcher(resp, expected):
-            return {"payload": payload, "expected": expected, "evaded": False}
+            return {"payload": payload, "expected": expected, "evaded": False,
+                    "excerpt": read_response(resp).excerpt}
         read = read_response(resp)
         # Response-guided ordering: after the first real read, let the decider
         # reorder whatever candidates remain (coverage preserved by the caller).
@@ -133,7 +134,8 @@ def adaptive_try(
                 r2 = send(variant)
                 used += 1
                 if matcher(r2, expected):
-                    return {"payload": variant, "expected": expected, "evaded": True}
+                    return {"payload": variant, "expected": expected, "evaded": True,
+                            "excerpt": read_response(r2).excerpt}
     return None
 
 

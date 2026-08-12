@@ -48,6 +48,11 @@ def _build_parser() -> argparse.ArgumentParser:
                         "payload ordering (LLM-driven when --llm-model is set)")
     p.add_argument("--adapt-steps", type=int, default=0,
                    help="cap sends per (point, class) hypothesis in adapt mode (0 = no cap)")
+    p.add_argument("--chain", action="store_true",
+                   help="chain findings: leaked endpoints/tokens/ids from a confirmed finding "
+                        "become new surface tested in the same run")
+    p.add_argument("--chain-rounds", type=int, default=0,
+                   help="max finding→surface→retest hops to follow (default 2)")
     p.add_argument("--stdout", action="store_true")
     return p
 
@@ -132,6 +137,10 @@ def _load(args) -> InjectionConfig:
         cfg.adapt = True
     if getattr(args, "adapt_steps", 0):
         cfg.adapt_steps = args.adapt_steps
+    if getattr(args, "chain", False):
+        cfg.chain = True
+    if getattr(args, "chain_rounds", 0):
+        cfg.chain_rounds = args.chain_rounds
     return cfg
 
 
