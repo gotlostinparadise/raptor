@@ -19,7 +19,10 @@ class FakeClient:
 
     def request(self, method: str, url: str, *, body=None, headers=None,
                 timeout: int = 30, max_bytes: int = 0, total_timeout: int = 600,
-                retries: int = 0, follow_redirects: bool = True) -> Response:
+                retries: int = 0, follow_redirects: bool = True,
+                raise_on_status: bool = True) -> Response:
+        # raise_on_status accepted to match the HttpClient protocol (the pentest
+        # session passes it through); the handler returns any status as data.
         h = dict(headers or {})
         self.calls.append((method.upper(), url, h))
         return self.handler(method.upper(), url, h, body)

@@ -61,6 +61,16 @@ class InjectionConfig:
     request_budget: Optional[int] = None
     triage: bool = False
     triage_max_pairs: int = 0
+    # T2 — read/adapt. ``adapt`` turns each in-band test into a probe→read→refine
+    # loop (WAF-evasion retries + response-guided ordering); ``adapt_steps`` caps
+    # the sends per (point, class) hypothesis (0 = no cap — the budget bounds it).
+    adapt: bool = False
+    adapt_steps: int = 0
+    # T3 — chaining. ``chain`` feeds artifacts leaked by confirmed findings
+    # (endpoints/tokens/object-ids) back as new surface tested in the same run;
+    # ``chain_rounds`` bounds how many finding→surface→retest hops to follow.
+    chain: bool = False
+    chain_rounds: int = 2
 
     def enabled_classes(self, *, have_oast: bool) -> List[str]:
         out = [c for c in self.classes if c in ALL_CLASSES]
@@ -91,6 +101,10 @@ def from_dict(data: Mapping[str, Any]) -> InjectionConfig:
         request_budget=int(budget) if budget else None,
         triage=bool(data.get("triage", False)),
         triage_max_pairs=int(data.get("triage_max_pairs", 0) or 0),
+        adapt=bool(data.get("adapt", False)),
+        adapt_steps=int(data.get("adapt_steps", 0) or 0),
+        chain=bool(data.get("chain", False)),
+        chain_rounds=int(data.get("chain_rounds", 2) or 2),
     )
 
 

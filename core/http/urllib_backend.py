@@ -959,17 +959,17 @@ class UrllibClient:
                         resp.headers.get("Retry-After"),
                     ),
                 )
-            # Treat 4xx/5xx as HttpError unless caller opted out via
-            # ``raise_on_status=False`` (e.g. OCI client's 401 →
-            # token-exchange retry needs to inspect WWW-Authenticate
-            # on the 401 response). When opting out we still bound
-            # the body read by max_bytes — a 4xx response can carry
-            # an arbitrary body.
-            if resp.status >= 500 and not raise_on_status:
-                raise HttpError(
-                    f"HTTP {resp.status} from {_safe_url_for_log(url)}",
-                    status=resp.status,
-                )
+            # Treat 4xx/5xx as HttpError unless the caller opted out via
+            # ``raise_on_status=False`` — then ANY status (4xx AND 5xx) is
+            # handed back as a full Response with its body (bounded by
+            # max_bytes), matching this method's documented contract
+            # ("the final Response, whatever its status, is handed back
+            # instead of raising"). Web-pentest / scanning callers need the
+            # 5xx body as DATA — a 500 carrying a DB error is the
+            # error-based-SQLi signal, and a per-payload server error must
+            # not be mistaken for a transport failure (status 0). Transient
+            # 503/429 still raise above so rate-limit/overload backoff is
+            # unaffected; only inspectable 5xx (500/502/504/…) return here.
             if resp.status >= 400 and raise_on_status:
                 # Drain enough body for the error message — bounded.
                 snippet = resp.read(512, decode_content=True) or b""
