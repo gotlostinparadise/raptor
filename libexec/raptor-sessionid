@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""Weak / predictable session-identifier analysis.
+
+Samples several issued session tokens (from a Set-Cookie name or a JSON path over
+repeated hits, or a pre-observed list) and analyses them for DETERMINISTIC
+weakness: reuse across sessions (CWE-384) or a predictable arithmetic sequence in
+decimal/hex/base64 (CWE-330). Those hard signals confirm (PROOF_TOKEN_ANALYSIS); a
+merely low-entropy token is reported SUSPECTED, never stamped confirmed.
+
+SAFE BY DEFAULT: offline analysis of pre-observed tokens sends nothing; live
+collection needs --active AND a non-empty `authorization`.
+
+Usage:
+  raptor-sessionid --out-dir <dir> --url https://x --token AAA --token AAB --token AAC   (offline)
+  raptor-sessionid --out-dir <dir> --url https://x --collect-url /login --method POST \
+       --cookie-name session --count 8 --authorization Y --active
+
+Exit codes: 0 ok, 2 usage / gate error.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.sessionid.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

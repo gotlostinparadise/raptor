@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""Anti-CSRF-token-absence testing — replay a state change without the token.
+
+Sends a state-changing request first WITH its anti-CSRF token (a valid baseline),
+then with the token FIELD REMOVED. If the server still performs the operation
+without the token, it does not validate an anti-CSRF token on that request — a
+confirmed CSRF weakness (CWE-352, PROOF_STATE_ORACLE). If the token-less request
+is rejected, the token is enforced (no finding). NOTE: token-absence is the
+classic signal; a SameSite-cookie defence can still block cross-origin exploitation
+— pair with a success_signature and manual cross-origin check for exploitability.
+
+SAFE BY DEFAULT: no request is sent unless --active AND a non-empty `authorization`.
+
+Usage:
+  raptor-csrf --out-dir <dir> --url http://dvwa --path /vulnerabilities/csrf/ \
+       --body 'password_new=x&password_conf=x&Change=Change&user_token=T' \
+       --token-field user_token --success-signature "Password Changed" --authorization Y --active
+
+Exit codes: 0 ok, 2 usage / gate error.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.csrf.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

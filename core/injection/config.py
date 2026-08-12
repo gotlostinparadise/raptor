@@ -18,9 +18,9 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 ALL_CLASSES = (
     "ssti", "cmdi", "sqli", "nosqli", "path_traversal", "ssrf_metadata", "xss",
     # blind (require an OAST client):
-    "ssrf", "xxe", "cmdi_blind", "sqli_oob",
+    "ssrf", "xxe", "cmdi_blind", "sqli_oob", "rfi",
 )
-BLIND_CLASSES = ("ssrf", "xxe", "cmdi_blind", "sqli_oob")
+BLIND_CLASSES = ("ssrf", "xxe", "cmdi_blind", "sqli_oob", "rfi")
 
 
 @dataclass
