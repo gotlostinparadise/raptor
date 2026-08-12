@@ -18,6 +18,8 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from core.session.bodydiff import norm_sha256
+
 
 @dataclass
 class RequestTemplate:
@@ -40,6 +42,10 @@ class Observation:
     resp_len: int
     body_sha256: str
     allowed: bool
+    #: SHA-256 of the volatile-normalized body (see core.session.bodydiff): the
+    #: object-equality key the diff compares on, so a timestamp / CSRF token /
+    #: request-id difference no longer hides a real break. Empty on old callers.
+    body_norm_sha256: str = ""
 
     @property
     def denied(self) -> bool:
@@ -56,6 +62,9 @@ class AuthzVerdict:
     violation: bool = False
     #: identities that reached the owner's resource but shouldn't have.
     offending: List[str] = field(default_factory=list)
+    #: how each offending identity's body matched the owner's — "exact"
+    #: (byte-identical) or "normalized" (equal only after volatile-noise removal).
+    match_kinds: Dict[str, str] = field(default_factory=dict)
 
     def observation(self, identity: str) -> Optional[Observation]:
         for o in self.observations:
@@ -82,11 +91,13 @@ def replay(engine, template: RequestTemplate, identity_name: str) -> Observation
         body=template.body, headers=template.headers, follow_redirects=False,
     )
     body = resp.body or b""
+    ct = (getattr(resp, "headers", {}) or {}).get("content-type", "")
     return Observation(
         identity=identity_name,
         status=resp.status,
         resp_len=len(body),
         body_sha256=hashlib.sha256(body).hexdigest(),
+        body_norm_sha256=norm_sha256(body, ct),
         allowed=_is_allowed(resp.status),
     )
 
@@ -121,9 +132,15 @@ def authorization_diff(
     for name in others:
         obs = replay(engine, template, name)
         verdict.observations.append(obs)
-        if obs.allowed and obs.body_sha256 == base.body_sha256:
+        # Object-equality, not byte-equality: a non-owner who receives the owner's
+        # object — even if the response also carries a fresh timestamp / CSRF token
+        # / request-id — has read it. Match on the volatile-normalized hash; still
+        # a strict equality (no fuzzy path), so distinct objects never collide.
+        if obs.allowed and obs.body_norm_sha256 == base.body_norm_sha256:
             verdict.violation = True
             verdict.offending.append(name)
+            verdict.match_kinds[name] = (
+                "exact" if obs.body_sha256 == base.body_sha256 else "normalized")
     return verdict
 
 

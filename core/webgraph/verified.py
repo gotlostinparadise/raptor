@@ -52,6 +52,8 @@ _CWE_BY_CLASS: Dict[str, str] = {
     # business logic / race
     "race_condition": "CWE-362", "business_logic": "CWE-840",
     "limit_bypass": "CWE-770",
+    # auth / JWT
+    "jwt_forgery": "CWE-347", "jwt_alg_none": "CWE-347", "jwt_weak_secret": "CWE-347",
 }
 _DEFAULT_CWE = "CWE-0"
 
@@ -61,6 +63,7 @@ _EVIDENCE_TYPE: Dict[str, str] = {
     M.PROOF_OAST_CALLBACK: "oast_callback",
     M.PROOF_REFLECTED_MARKER: "reflected_marker",
     M.PROOF_STATE_ORACLE: "state_oracle",
+    M.PROOF_TOKEN_FORGED: "token_forged",
 }
 
 

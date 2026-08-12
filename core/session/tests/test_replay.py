@@ -57,6 +57,38 @@ def test_bola_detected_when_other_identity_reads_owner_object():
     assert "anonymous" not in verdict.offending          # anon was denied (401)
 
 
+def _broken_app_with_volatile():
+    """BOLA app whose responses embed a per-response CSRF token + timestamp, so
+    the owner's and attacker's bodies for the SAME object differ byte-wise while
+    the object is identical — exact-hash would MISS this real break."""
+    counter = [0]
+
+    def handler(method, url, headers, body):
+        if not (headers.get("Authorization") or headers.get("Cookie")):
+            return resp(401)
+        counter[0] += 1
+        # same object, but a fresh nonce each call
+        b = ('{"order":1,"owner":"user_a","balance":999,'
+             f'"csrf_token":"nonce-{counter[0]}"}}').encode()
+        return resp(200, body=b, **{"Content-Type": "application/json"})
+    return handler
+
+
+def test_bola_detected_despite_per_response_volatile_fields():
+    # S1 recall: exact-hash never matched (nonce differs every call); the
+    # normalized diff sees the same object and confirms — flagged "normalized".
+    eng = _engine(_broken_app_with_volatile())
+    verdict = authorization_diff(
+        eng, RequestTemplate("GET", "https://x.com/api/orders/1"), owner="user_a")
+    assert verdict.violation is True
+    assert "user_b" in verdict.offending
+    assert verdict.match_kinds.get("user_b") == "normalized"
+    # owner/attacker raw hashes genuinely differ (proves it's not an exact match)
+    a = verdict.observation("user_a"); b = verdict.observation("user_b")
+    assert a.body_sha256 != b.body_sha256
+    assert a.body_norm_sha256 == b.body_norm_sha256
+
+
 def test_no_violation_on_secure_app():
     eng = _engine(_secure_app())
     verdict = authorization_diff(
