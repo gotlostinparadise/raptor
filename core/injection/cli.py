@@ -56,6 +56,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--union", action="store_true",
                    help="escalate a confirmed SQLi to reflection-proof UNION data extraction "
                         "(read-only: schema/version, and on a real dump the leaked rows)")
+    p.add_argument("--verify-model", action="append", default=[],
+                   help="N7: an extra model to independently re-judge confirmed findings "
+                        "(repeatable); advisory confidence signal, never overrides the oracle")
     p.add_argument("--stdout", action="store_true")
     return p
 
@@ -146,6 +149,8 @@ def _load(args) -> InjectionConfig:
         cfg.chain_rounds = args.chain_rounds
     if getattr(args, "union", False):
         cfg.union = True
+    if getattr(args, "verify_model", None):
+        cfg.verify_models = list(args.verify_model)
     return cfg
 
 

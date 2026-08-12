@@ -55,6 +55,7 @@ class InjectionRun:
     edge_count: int = 0
     triage: Optional[Dict[str, Any]] = None   # T1 triage plan summary (None = full sweep)
     chain: Optional[Dict[str, Any]] = None    # T3 chaining log (None = no chaining)
+    verification: Optional[List[Dict[str, Any]]] = None   # N7 multi-model confidence
 
     def to_dict(self) -> Dict[str, Any]:
         d = {
@@ -68,6 +69,8 @@ class InjectionRun:
             d["triage"] = self.triage
         if self.chain is not None:
             d["chain"] = self.chain
+        if self.verification is not None:
+            d["verification"] = self.verification
         return d
 
 
@@ -607,6 +610,17 @@ def run_injection(
                                     param=meta.get("param", ""), owasp="API7"))
             run.findings.append({"id": vid, "class": meta.get("class", "blind"),
                                  "proof": M.PROOF_OAST_CALLBACK})
+
+    # N7: multi-model confidence signal over the confirmed findings (advisory —
+    # the mechanical oracle stays the verdict; this never downgrades a finding).
+    # No-op unless verifier models are configured.
+    verify_models = list(getattr(config, "verify_models", []) or [])
+    if verify_models and run.findings:
+        from core.injection.verify import verify_findings
+        try:
+            run.verification = verify_findings(run.findings, verify_models)
+        except Exception as exc:
+            run.warnings.append(f"verification failed: {type(exc).__name__}: {exc}")
 
     accumulated = {M.VulnRecord.KIND: vulns} if vulns else {}
     _finalize(out, run, accumulated)
