@@ -187,7 +187,9 @@ class InjectionRunner:
 
     def _inband(self, run, point, classes, vulns):
         eng, base = self.engine, run.base_url
-        from core.injection.adapt import adaptive_try, llm_reorder_factory
+        from core.injection.adapt import (
+            adaptive_try, llm_reorder_factory, read_response)
+        from core.waf.evasion import mutations as waf_mutations
 
         def send(pl):
             return self._dispatch(
@@ -202,6 +204,21 @@ class InjectionRunner:
         def _reorder(vc):
             if self.adapt and self.llm_model:
                 return llm_reorder_factory(vc, self.llm_model, target=base)
+            return None
+
+        def _boolean(baseline, tp, fp):
+            """Confirm a boolean pair; on a WAF block (adapt on), retry the same
+            logic in evasion-encoded form (N5). Returns the confirming (true,
+            false) pair or None. mutations() yields parallel encodings, so the
+            zip keeps the true/false variants in lockstep."""
+            t1, t2, f1 = send(tp), send(tp), send(fp)
+            if oracles.stable_boolean(baseline, t1, t2, f1):
+                return (tp, fp)
+            if self.adapt and (read_response(t1).blocked or read_response(f1).blocked):
+                for etp, efp in zip(waf_mutations(tp)[1:], waf_mutations(fp)[1:]):
+                    if oracles.stable_boolean(baseline, send(etp), send(etp),
+                                              send(efp)):
+                        return (etp, efp)
             return None
 
         if "ssti" in classes:
@@ -244,10 +261,11 @@ class InjectionRunner:
             if not hit:
                 baseline = send("1")
                 for tp, fp in payloads.sqli_boolean():
-                    # send TRUE twice for jitter control, then FALSE
-                    if oracles.stable_boolean(baseline, send(tp), send(tp), send(fp)):
+                    got = _boolean(baseline, tp, fp)
+                    if got:
                         self._finding(run, point, "sqli", "API8", M.PROOF_REFLECTED_MARKER,
-                                      {"true": tp, "false": fp, "method": "boolean"}, vulns)
+                                      {"true": got[0], "false": got[1],
+                                       "method": "boolean"}, vulns)
                         hit = True
                         break
             # N1: escalate a confirmed SQLi to reflection-proof UNION extraction —
@@ -258,9 +276,10 @@ class InjectionRunner:
         if "nosqli" in classes:
             baseline = send("1")
             for tp, fp in payloads.nosqli_boolean():
-                if oracles.stable_boolean(baseline, send(tp), send(tp), send(fp)):
+                got = _boolean(baseline, tp, fp)
+                if got:
                     self._finding(run, point, "nosqli", "API8", M.PROOF_REFLECTED_MARKER,
-                                  {"true": tp, "false": fp}, vulns)
+                                  {"true": got[0], "false": got[1]}, vulns)
                     break
         if "path_traversal" in classes:
             hit = adaptive_try(payloads.path_traversal(), send, oracles.reflected,
@@ -572,16 +591,29 @@ def run_injection(
             # Test each derived point as the tester AND as any escalated identity
             # (a leaked token may unlock surface the anonymous tester can't reach).
             who_list = [default_ident] + list(registered)
-            stop = False
             for p in new_points:
-                tested.add(p.label)
+                tested.add(p.label)   # mark all derived points so none re-derive
+            # N5: triage the chained points too, so a budget is spent on the
+            # plausible (point, class) pairs of the grown surface — not every class
+            # on every leaked endpoint. Only when triage is active for the run.
+            cplan = None
+            if triage_on and new_points:
+                from core.injection.triage import triage_points as _triage_chained
+                cplan = _triage_chained(new_points, classes, llm_model=llm_model,
+                                        target=config.base_url)
+            walk = cplan.ordered_points(new_points) if cplan is not None else new_points
+            stop = False
+            for p in walk:
                 if p.location == "fragment":
+                    continue
+                sel = cplan.classes_for(p) if cplan is not None else classes
+                if not sel:
                     continue
                 for who in who_list:
                     runner.identity_name = who
                     try:
-                        runner._inband(run, p, classes, vulns)
-                        planted.update(runner._blind(run, p, classes))
+                        runner._inband(run, p, sel, vulns)
+                        planted.update(runner._blind(run, p, sel))
                     except InjectionHalt as halt:
                         run.warnings.append(f"chain halted early: {halt}")
                         stop = True
