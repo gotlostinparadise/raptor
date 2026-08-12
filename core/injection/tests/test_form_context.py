@@ -25,7 +25,7 @@ def test_send_includes_siblings():
 
     class _E:
         def request(self, ident, method, url, *, body=None, headers=None,
-                    follow_redirects=False):
+                    follow_redirects=False, raise_on_status=True):
             sent["url"] = url
             sent["body"] = body
             return type("R", (), {"status": 200, "body": b""})

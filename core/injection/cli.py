@@ -43,6 +43,11 @@ def _build_parser() -> argparse.ArgumentParser:
                         "spends the budget on the highest-priority (point, class) pairs first")
     p.add_argument("--triage", action="store_true",
                    help="run the mechanical (point, class) pre-score even without a model/budget")
+    p.add_argument("--adapt", action="store_true",
+                   help="read responses and adapt: WAF-evasion retries + response-guided "
+                        "payload ordering (LLM-driven when --llm-model is set)")
+    p.add_argument("--adapt-steps", type=int, default=0,
+                   help="cap sends per (point, class) hypothesis in adapt mode (0 = no cap)")
     p.add_argument("--stdout", action="store_true")
     return p
 
@@ -123,6 +128,10 @@ def _load(args) -> InjectionConfig:
         cfg.request_budget = args.budget
     if getattr(args, "triage", False):
         cfg.triage = True
+    if getattr(args, "adapt", False):
+        cfg.adapt = True
+    if getattr(args, "adapt_steps", 0):
+        cfg.adapt_steps = args.adapt_steps
     return cfg
 
 

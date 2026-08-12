@@ -85,12 +85,17 @@ class SessionEngine:
         headers: Optional[Dict[str, str]] = None,
         follow_redirects: bool = True,
         retries: int = 0,
+        raise_on_status: bool = True,
         _allow_refresh: bool = True,
     ) -> Response:
         """Send ``method url`` as ``identity_name`` with full session state.
 
         Non-idempotent by default (``retries=0``) — a session request replays
-        real traffic, so we don't silently repeat it.
+        real traffic, so we don't silently repeat it. ``raise_on_status=False``
+        lets a 4xx/5xx come back as a full :class:`Response` *with its body* —
+        which the injection oracles need, because a 500 carrying a DB error is
+        the error-based-SQLi signal, not a failure to swallow. (A refused/timed-
+        out connection still surfaces as ``status == 0`` either way.)
         """
         ident = self.identity(identity_name)
         method = method.upper()
@@ -109,6 +114,7 @@ class SessionEngine:
             resp = self.client.request(
                 method, url, body=body, headers=h,
                 follow_redirects=follow_redirects, retries=retries,
+                raise_on_status=raise_on_status,
             )
         except HttpError as exc:
             resp = Response(status=int(exc.status or 0), headers={}, body=b"", url=url)
@@ -125,7 +131,7 @@ class SessionEngine:
             return self.request(
                 identity_name, method, url, body=body, headers=headers,
                 follow_redirects=follow_redirects, retries=retries,
-                _allow_refresh=False,
+                raise_on_status=raise_on_status, _allow_refresh=False,
             )
         return resp
 

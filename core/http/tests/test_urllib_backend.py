@@ -1209,3 +1209,36 @@ def test_circuit_break_attribute_on_mid_retry_abort(_mock_sleep):
             total_timeout=60, retries=2,
         )
     assert exc_info.value.circuit_break is True
+
+
+class TestRaiseOnStatusFalse5xx:
+    """A 5xx with raise_on_status=False must hand back the Response *with body*.
+
+    Web-pentest/scanning callers need the 5xx body as data (a 500 carrying a DB
+    error is the error-based-SQLi signal). raise_on_status=True still raises so
+    the retry/propagate path is unchanged.
+    """
+
+    def test_5xx_returns_body_when_not_raising(self):
+        body = b"near syntax error: SQLITE_ERROR"
+        client, _ = _client_with_mock_pool(
+            _stub_response(body, status=500, reason="Server Error"))
+        r = client.request("GET", "https://example.com/x",
+                           raise_on_status=False, retries=0)
+        assert r.status == 500 and body in (r.body or b"")
+
+    def test_5xx_still_raises_when_raise_on_status_true(self):
+        body = b"boom"
+        client, _ = _client_with_mock_pool(
+            _stub_response(body, status=500, reason="Server Error"))
+        with pytest.raises(HttpError):
+            client.request("GET", "https://example.com/x",
+                           raise_on_status=True, retries=0)
+
+    def test_503_still_raises_even_when_not_raising(self):
+        # 503/429 remain transient (rate-limit/overload) → still raise for backoff.
+        client, _ = _client_with_mock_pool(
+            _stub_response(b"busy", status=503, reason="Service Unavailable"))
+        with pytest.raises(HttpError):
+            client.request("GET", "https://example.com/x",
+                           raise_on_status=False, retries=0)

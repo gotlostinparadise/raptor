@@ -88,7 +88,9 @@ def _send(engine, identity: str, base_url: str, point: InjectionPoint, payload: 
         q.extend(siblings.items())
         q.append((point.param, payload))
         url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(q), parts.fragment))
-        return engine.request(identity, method, url)
+        # raise_on_status=False: a 4xx/5xx is oracle signal (a 500 with a DB
+        # error is error-based SQLi) — the body must reach the oracle, not raise.
+        return engine.request(identity, method, url, raise_on_status=False)
     fields = {**siblings, point.param: payload}
     if point.content_type == "json":
         body = json.dumps(fields).encode("utf-8")
@@ -97,7 +99,7 @@ def _send(engine, identity: str, base_url: str, point: InjectionPoint, payload: 
         body = urlencode(fields).encode("utf-8")
         ct = "application/x-www-form-urlencoded"
     return engine.request(identity, method, f"{base_url}{point.path}", body=body,
-                          headers={"Content-Type": ct})
+                          headers={"Content-Type": ct}, raise_on_status=False)
 
 
 def _body_text(resp) -> str:
@@ -107,7 +109,7 @@ def _body_text(resp) -> str:
 
 class InjectionRunner:
     def __init__(self, engine, *, identity: str = _TESTER, oast=None, llm_model=None,
-                 budget=None, health=None) -> None:
+                 budget=None, health=None, adapt: bool = False, adapt_steps: int = 0) -> None:
         self.engine = engine
         self.identity_name = identity   # session identity to inject as
         self.oast = oast
@@ -116,6 +118,9 @@ class InjectionRunner:
         self.budget = budget         # RequestBudget — hard cap on requests sent
         self.health = health         # HostHealth — connection-error circuit breaker
         self.halted: Optional[str] = None   # set when a guard stops the phase
+        # T2 read/adapt (off = the historical fixed-catalog loop, unchanged).
+        self.adapt = adapt           # read responses → evasion + response-guided order
+        self.adapt_steps = adapt_steps   # per-hypothesis step cap (0 = no cap)
         self._markers = MarkerFactory()
         self._n = 0
 
@@ -172,33 +177,57 @@ class InjectionRunner:
 
     def _inband(self, run, point, classes, vulns):
         eng, base = self.engine, run.base_url
+        from core.injection.adapt import adaptive_try, llm_reorder_factory
 
         def send(pl):
             return self._dispatch(
                 run, lambda: _send(eng, self.identity_name, base, point, pl))
 
+        # T2: when adapt is on, single-response classes read the response — WAF
+        # blocks trigger evasion-encoded retries, and the first read reorders the
+        # remaining candidates (LLM when a model is set). With adapt off,
+        # adaptive_try is the historical fixed-catalog loop, unchanged.
+        steps = self.adapt_steps or None
+
+        def _reorder(vc):
+            if self.adapt and self.llm_model:
+                return llm_reorder_factory(vc, self.llm_model, target=base)
+            return None
+
         if "ssti" in classes:
-            for pl, expected in payloads.ssti(self._markers.next()):
-                if oracles.ssti_confirmed(send(pl), expected):
-                    self._finding(run, point, "ssti", "API8", M.PROOF_REFLECTED_MARKER,
-                                  {"payload": pl, "marker": expected}, vulns)
-                    break
+            hit = adaptive_try(payloads.ssti(self._markers.next()), send,
+                               oracles.ssti_confirmed, steps=steps,
+                               evade=self.adapt, reorder=_reorder("ssti"))
+            if hit:
+                self._finding(run, point, "ssti", "API8", M.PROOF_REFLECTED_MARKER,
+                              {"payload": hit["payload"], "marker": hit["expected"]}, vulns)
         if "cmdi" in classes:
-            for pl, expected in payloads.cmdi(self._markers.next()):
-                # expected is the COMPUTED product — reflection can't match it
-                if oracles.reflected(send(pl), expected):
-                    self._finding(run, point, "cmdi", "API8", M.PROOF_REFLECTED_MARKER,
-                                  {"payload": pl, "marker": expected}, vulns)
-                    break
+            # expected is the COMPUTED product — reflection can't match it
+            hit = adaptive_try(payloads.cmdi(self._markers.next()), send,
+                               oracles.reflected, steps=steps,
+                               evade=self.adapt, reorder=_reorder("cmdi"))
+            if hit:
+                self._finding(run, point, "cmdi", "API8", M.PROOF_REFLECTED_MARKER,
+                              {"payload": hit["payload"], "marker": hit["expected"]}, vulns)
         if "sqli" in classes:
             hit = False
-            for pl in payloads.sqli_error():
-                db = oracles.sql_error(send(pl))
+            _db = {}
+
+            def _sql_match(resp, _expected):
+                db = oracles.sql_error(resp)
                 if db:
-                    self._finding(run, point, "sqli", "API8", M.PROOF_REFLECTED_MARKER,
-                                  {"payload": pl, "db": db, "method": "error"}, vulns)
-                    hit = True
-                    break
+                    _db["db"] = db
+                    return True
+                return False
+
+            e_hit = adaptive_try([(pl, None) for pl in payloads.sqli_error()], send,
+                                 _sql_match, steps=steps, evade=self.adapt,
+                                 reorder=_reorder("sqli"))
+            if e_hit:
+                self._finding(run, point, "sqli", "API8", M.PROOF_REFLECTED_MARKER,
+                              {"payload": e_hit["payload"], "db": _db.get("db"),
+                               "method": "error"}, vulns)
+                hit = True
             if not hit:
                 baseline = send("1")
                 for tp, fp in payloads.sqli_boolean():
@@ -215,11 +244,13 @@ class InjectionRunner:
                                   {"true": tp, "false": fp}, vulns)
                     break
         if "path_traversal" in classes:
-            for pl, expected in payloads.path_traversal():
-                if oracles.reflected(send(pl), expected):
-                    self._finding(run, point, "path_traversal", "API8",
-                                  M.PROOF_REFLECTED_MARKER, {"payload": pl}, vulns)
-                    break
+            hit = adaptive_try(payloads.path_traversal(), send, oracles.reflected,
+                               steps=steps, evade=self.adapt,
+                               reorder=_reorder("path_traversal"))
+            if hit:
+                self._finding(run, point, "path_traversal", "API8",
+                              M.PROOF_REFLECTED_MARKER,
+                              {"payload": hit["payload"]}, vulns)
         if "xss" in classes:
             from core.payloads import default_store, detect_context, propose, record_confirmed
             m = self._markers.next()
@@ -241,11 +272,13 @@ class InjectionRunner:
                                      target=run.base_url, timestamp=_now())
                     break
         if "ssrf_metadata" in classes:
-            for pl in payloads.ssrf_metadata():
-                if oracles.metadata_leak(send(pl)):
-                    self._finding(run, point, "ssrf", "API7", M.PROOF_REFLECTED_MARKER,
-                                  {"payload": pl, "method": "metadata"}, vulns)
-                    break
+            hit = adaptive_try([(pl, None) for pl in payloads.ssrf_metadata()], send,
+                               lambda resp, _e: oracles.metadata_leak(resp),
+                               steps=steps, evade=self.adapt,
+                               reorder=_reorder("ssrf_metadata"))
+            if hit:
+                self._finding(run, point, "ssrf", "API7", M.PROOF_REFLECTED_MARKER,
+                              {"payload": hit["payload"], "method": "metadata"}, vulns)
 
     def _blind(self, run, point, classes) -> Dict[str, Dict[str, str]]:
         """Plant OAST payloads; return ``{finding_id: {class, endpoint_id, param}}``.
@@ -367,7 +400,9 @@ def run_injection(
               if (plan is not None or budget is not None) else None)
 
     runner = InjectionRunner(engine, identity=ident_name, oast=oast,
-                             llm_model=llm_model, budget=budget, health=health)
+                             llm_model=llm_model, budget=budget, health=health,
+                             adapt=bool(getattr(config, "adapt", False)),
+                             adapt_steps=int(getattr(config, "adapt_steps", 0) or 0))
     vulns: List[Dict[str, Any]] = []
     planted: Dict[str, Dict[str, str]] = {}
     # Walk points in triage-priority order (best pairs first) so a request budget
