@@ -124,6 +124,7 @@ class InjectionRunner:
         # T2 read/adapt (off = the historical fixed-catalog loop, unchanged).
         self.adapt = adapt           # read responses → evasion + response-guided order
         self.adapt_steps = adapt_steps   # per-hypothesis step cap (0 = no cap)
+        self.union = False           # N1: escalate confirmed SQLi to UNION extraction
         self._markers = MarkerFactory()
         self._n = 0
 
@@ -247,7 +248,13 @@ class InjectionRunner:
                     if oracles.stable_boolean(baseline, send(tp), send(tp), send(fp)):
                         self._finding(run, point, "sqli", "API8", M.PROOF_REFLECTED_MARKER,
                                       {"true": tp, "false": fp, "method": "boolean"}, vulns)
+                        hit = True
                         break
+            # N1: escalate a confirmed SQLi to reflection-proof UNION extraction —
+            # a stronger finding, and real artifacts (schema/version, and on a real
+            # dump the leaked rows) for T3 chaining. Read-only.
+            if hit and self.union:
+                self._union_extract(run, point, vulns, send)
         if "nosqli" in classes:
             baseline = send("1")
             for tp, fp in payloads.nosqli_boolean():
@@ -293,6 +300,33 @@ class InjectionRunner:
                 self._finding(run, point, "ssrf", "API7", M.PROOF_REFLECTED_MARKER,
                               {"payload": hit["payload"], "method": "metadata",
                                "response_excerpt": hit.get("excerpt", "")}, vulns)
+
+    def _union_extract(self, run, point, vulns, send) -> None:
+        """N1: pull read-only data out of a confirmed-injectable point via UNION.
+
+        Confirmation is reflection-proof (a computed marker rendered by the
+        injected SELECT). The extracted data is stored as the finding's
+        ``response_excerpt`` so T3 chaining mines it for tokens/emails/schema.
+        Budget/circuit halts propagate (they stop the phase, not just this step).
+        """
+        from core.injection.union import extract_via_union
+        try:
+            result = extract_via_union(point, send, self._markers.next())
+        except InjectionHalt:
+            raise
+        except Exception as exc:
+            run.warnings.append(
+                f"{point.label}: union extraction failed: {type(exc).__name__}")
+            return
+        if result is None:
+            return
+        excerpt = ("; ".join(f"{k}={v}" for k, v in result.extracted.items())
+                   or result.summary())
+        self._finding(run, point, "sqli", "API8", M.PROOF_REFLECTED_MARKER,
+                      {"payload": result.confirm_payload, "method": "union",
+                       "columns": result.columns, "dialect": result.dialect,
+                       "extracted": result.extracted,
+                       "response_excerpt": excerpt}, vulns)
 
     def _blind(self, run, point, classes) -> Dict[str, Dict[str, str]]:
         """Plant OAST payloads; return ``{finding_id: {class, endpoint_id, param}}``.
@@ -417,6 +451,7 @@ def run_injection(
                              llm_model=llm_model, budget=budget, health=health,
                              adapt=bool(getattr(config, "adapt", False)),
                              adapt_steps=int(getattr(config, "adapt_steps", 0) or 0))
+    runner.union = bool(getattr(config, "union", False))
     vulns: List[Dict[str, Any]] = []
     planted: Dict[str, Dict[str, str]] = {}
     # Walk points in triage-priority order (best pairs first) so a request budget
@@ -501,35 +536,62 @@ def run_injection(
     # LLM-directed when a model is set; the oracle still confirms B. Bounded by the
     # request budget (via _dispatch) and a chain-round cap.
     if getattr(config, "chain", False) and runner.halted is None:
-        from core.injection.chain import derive_points, extract_artifacts
+        from core.injection.chain import (
+            derive_identities, derive_points, extract_artifacts)
         chain_rounds = int(getattr(config, "chain_rounds", 2) or 2)
         tested = {p.label for p in config.points}
+        default_ident = runner.identity_name
+        registered: List[str] = []          # N2: escalated identities from leaked tokens
         chain_log: List[Dict[str, Any]] = []
         for cround in range(1, chain_rounds + 1):
             arts = extract_artifacts(run.findings, base_url=config.base_url)
+            # N2: promote leaked tokens to bearer identities for escalated replay.
+            new_idents: List[str] = []
+            for name, token in derive_identities(arts):
+                if name not in registered:
+                    try:
+                        from core.session.identity import Identity
+                        idn = Identity(name=name)
+                        idn.set_bearer(token)
+                        runner.engine.add_identity(idn)
+                        registered.append(name)
+                        new_idents.append(name)
+                    except Exception:
+                        pass
             new_points = derive_points(arts, tested, llm_model=llm_model,
                                        target=config.base_url)
-            if not new_points:
+            if not new_points and not new_idents:
                 break
             chain_log.append({"round": cround, "artifacts": arts.to_dict(),
-                              "new_points": [p.label for p in new_points]})
+                              "new_points": [p.label for p in new_points],
+                              "new_identities": new_idents})
             run.warnings.append(
                 f"[chain r{cround}] {len(new_points)} new point(s) from "
-                f"{len(arts.endpoints)} leaked endpoint(s)")
+                f"{len(arts.endpoints)} leaked endpoint(s), "
+                f"{len(new_idents)} leaked identity(ies)")
+            # Test each derived point as the tester AND as any escalated identity
+            # (a leaked token may unlock surface the anonymous tester can't reach).
+            who_list = [default_ident] + list(registered)
             stop = False
             for p in new_points:
                 tested.add(p.label)
                 if p.location == "fragment":
                     continue
-                try:
-                    runner._inband(run, p, classes, vulns)
-                    planted.update(runner._blind(run, p, classes))
-                except InjectionHalt as halt:
-                    run.warnings.append(f"chain halted early: {halt}")
-                    stop = True
+                for who in who_list:
+                    runner.identity_name = who
+                    try:
+                        runner._inband(run, p, classes, vulns)
+                        planted.update(runner._blind(run, p, classes))
+                    except InjectionHalt as halt:
+                        run.warnings.append(f"chain halted early: {halt}")
+                        stop = True
+                        break
+                    except Exception as exc:
+                        run.warnings.append(
+                            f"{p.label} as {who}: {type(exc).__name__}: {exc}")
+                runner.identity_name = default_ident
+                if stop:
                     break
-                except Exception as exc:
-                    run.warnings.append(f"{p.label}: {type(exc).__name__}: {exc}")
             if stop:
                 break
         if chain_log:

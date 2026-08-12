@@ -53,6 +53,9 @@ def _build_parser() -> argparse.ArgumentParser:
                         "become new surface tested in the same run")
     p.add_argument("--chain-rounds", type=int, default=0,
                    help="max finding→surface→retest hops to follow (default 2)")
+    p.add_argument("--union", action="store_true",
+                   help="escalate a confirmed SQLi to reflection-proof UNION data extraction "
+                        "(read-only: schema/version, and on a real dump the leaked rows)")
     p.add_argument("--stdout", action="store_true")
     return p
 
@@ -141,6 +144,8 @@ def _load(args) -> InjectionConfig:
         cfg.chain = True
     if getattr(args, "chain_rounds", 0):
         cfg.chain_rounds = args.chain_rounds
+    if getattr(args, "union", False):
+        cfg.union = True
     return cfg
 
 
