@@ -59,7 +59,12 @@ def main(argv=None) -> int:
     from core.labeled_attempts.view import collect_outcomes, render_outcome_summary
 
     out_dir = Path(args.output_dir)
-    project_root = Path(args.project_root) if args.project_root else None
+    # Web/webpentest proofs land in the run dir's own project pool
+    # (<out_dir>/labeled_attempts/...), which collect_outcomes only reads when a
+    # project_root is given. Default it to out_dir so a bare
+    # `raptor-verified-outcomes <run-dir>` surfaces that run's proofs; an explicit
+    # --project-root still overrides for the cross-run view.
+    project_root = Path(args.project_root) if args.project_root else out_dir
     outcomes = collect_outcomes(out_dir, project_root=project_root)
 
     if args.json:

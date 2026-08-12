@@ -36,6 +36,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--browser", action="store_true",
                    help="DOM-aware crawl of --origins with headless Chromium "
                         "(active; requires playwright+chromium)")
+    p.add_argument("--crawl", action="store_true",
+                   help="static HTTP crawl of --origins (fetch HTML, follow "
+                        "<a href>/<form>; active, server-rendered apps, no browser)")
     p.add_argument("--allow-unproxied", action="store_true",
                    help="permit browser navigation to a remote host with no "
                         "egress proxy (loopback fixtures / explicit opt-out)")
@@ -78,13 +81,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     sources: Optional[List[Source]] = None
-    if args.spec or args.browser:
+    if args.spec or args.browser or args.crawl:
         sources = []
         if args.spec:
             # Lazy import so the spec source registers, and so a missing optional
             # dependency in a future source can't break `--rebuild`.
             from core.webgraph.spec_source import ApiSpecImportSource
             sources.append(ApiSpecImportSource(spec_path=args.spec, base_url=args.base_url))
+        if args.crawl:
+            from core.http_crawl.source import HttpCrawlSource
+            sources.append(HttpCrawlSource(seeds=origins or ()))
         if args.browser:
             from core.browser import harness as _bh
             if not _bh.available():

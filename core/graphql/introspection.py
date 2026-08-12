@@ -30,11 +30,13 @@ class Operation:
 
 
 def post_graphql(client, url: str, query: str, *, variables: Optional[dict] = None,
-                 headers: Optional[dict] = None):
+                 headers: Optional[dict] = None, identity: str = "tester"):
     """POST a GraphQL document; return the raw :class:`core.http.Response`.
 
     ``client`` may be a :class:`core.http.HttpClient` or a
     :class:`core.session.engine.SessionEngine`-like object exposing ``request``.
+    ``identity`` names the session identity to send as when ``client`` is an
+    engine (a reused, logged-in engine's identity is not necessarily ``tester``).
     """
     body = json.dumps({"query": query, "variables": variables or {}}).encode("utf-8")
     h = {"Content-Type": "application/json"}
@@ -44,7 +46,7 @@ def post_graphql(client, url: str, query: str, *, variables: Optional[dict] = No
     try:
         return client.request("POST", url, body=body, headers=h, follow_redirects=False)
     except TypeError:
-        return client.request("tester", "POST", url, body=body, headers=h)
+        return client.request(identity, "POST", url, body=body, headers=h)
 
 
 def schema_from_response(resp) -> Optional[Dict[str, Any]]:

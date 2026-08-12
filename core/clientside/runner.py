@@ -36,6 +36,15 @@ _OWASP = {
     "open_redirect": "API8",
 }
 
+# Only findings where we sent a marker/probe and observed a reflected or
+# behavioural response are a tool-produced PROOF (reflected_marker): the server
+# echoed our attacker Origin, or followed our redirect to the attacker host.
+# Everything else here — missing/weak CSP, framable page, insecure cookie flags,
+# CORS wildcard/null — is a header OBSERVATION read straight off the wire: a real
+# weakness, but not an exploit proof, so it stays `suspected` and out of the
+# verified pool (see core/webgraph/verified.py: record_confirmed skips it).
+_REFLECTION_PROVEN = frozenset({"cors_origin_reflection", "open_redirect"})
+
 
 @dataclass
 class ClientSideRun:
@@ -117,16 +126,28 @@ def run_clientside(
     client = (client_factory or (lambda h: _client_for(config.base_url)))(
         [host] if host else [])
 
+    # Shared authenticated session: attach the logged-in identity's headers +
+    # cookies (or explicit config cookies/headers) to every probe, so client-side
+    # misconfig checks run against the post-login surface too.
+    from core.session.attach import merged_auth_headers
+
+    def auth_for(url: str) -> Dict[str, str]:
+        return merged_auth_headers(url, session=config.session,
+                                   cookies=config.cookies, headers=config.headers)
+
     vulns: List[Dict[str, Any]] = []
     n = [0]
 
     def record(vuln_type, endpoint, finding):
         n[0] += 1
+        proven = vuln_type in _REFLECTION_PROVEN
+        status = M.STATUS_CONFIRMED if proven else M.STATUS_SUSPECTED
+        proof = M.PROOF_REFLECTED_MARKER if proven else M.PROOF_NONE
         vulns.append(M.VulnRecord(
             id=f"CS-{n[0]:04d}", vuln_class=vuln_type, endpoint_id=endpoint,
             severity=finding.get("severity", "low"),
-            owasp=_OWASP.get(vuln_type, "API8"), status=M.STATUS_CONFIRMED,
-            proof_kind=M.PROOF_REFLECTED_MARKER, evidence=finding,
+            owasp=_OWASP.get(vuln_type, "API8"), status=status,
+            proof_kind=proof, evidence=finding,
             source="clientside").to_row())
         run.findings.append({"id": f"CS-{n[0]:04d}", "class": vuln_type,
                              "severity": finding.get("severity", "low"),
@@ -136,7 +157,7 @@ def run_clientside(
     # --- base page: CSP / clickjacking / cookies ---
     try:
         run.requests_sent += 1
-        resp = _fetch(client, "GET", config.base_url)
+        resp = _fetch(client, "GET", config.base_url, headers=auth_for(config.base_url) or None)
         headers = dict(resp.headers)
         csp = headers.get("content-security-policy")
         directives = analyzers.parse_csp(csp or "")
@@ -155,7 +176,7 @@ def run_clientside(
     try:
         run.requests_sent += 1
         origin = f"https://{MARKER_HOST}"
-        resp = _fetch(client, "GET", config.base_url, headers={"Origin": origin})
+        resp = _fetch(client, "GET", config.base_url, headers={**auth_for(config.base_url), "Origin": origin})
         for f in analyzers.cors_analysis(origin, dict(resp.headers)):
             record(f["type"], base_eid, f)
     except Exception as exc:
@@ -167,7 +188,8 @@ def run_clientside(
             url = _with_query(f"{config.base_url}{path}", param, f"//{MARKER_HOST}/")
             try:
                 run.requests_sent += 1
-                resp = _fetch(client, "GET", url, follow_redirects=False)
+                resp = _fetch(client, "GET", url, headers=auth_for(url) or None,
+                              follow_redirects=False)
                 loc = dict(resp.headers).get("location", "")
                 f = analyzers.open_redirect(loc, resp.url, MARKER_HOST)
                 if f:

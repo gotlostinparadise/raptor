@@ -10,6 +10,9 @@ authorization attestation, rather than hand-writing the whole file.
 
 from __future__ import annotations
 
+import json
+import re
+from pathlib import Path
 from typing import Any, Dict, List, Mapping
 
 _DEFAULT_IDENTITIES = [
@@ -76,4 +79,89 @@ def template_from_inventory(doc: Mapping[str, Any], *, base_url: str = "") -> Di
     }
 
 
-__all__ = ["template_from_inventory"]
+def _looks_object_scoped(path: str) -> bool:
+    """Heuristic object-scoping for surfaces that didn't tag it (a plain HTTP
+    crawl doesn't): an endpoint is object-scoped when its path/query carries an
+    object id — a numeric segment (``/users/1``), a UUID, a templated ``{id}``,
+    or an ``*id*`` query param (``?id=``, ``?user_id=``)."""
+    p = path or ""
+    if re.search(r"/\d+(?:/|$)", p):
+        return True
+    if re.search(r"/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-", p):
+        return True
+    if re.search(r"\{[^}]+\}", p):
+        return True
+    if re.search(r"[?&][^=&]*id[^=&]*=", p, re.IGNORECASE):
+        return True
+    return False
+
+
+def endpoints_from_graph(normalized_dir: Any) -> List[Dict[str, Any]]:
+    """Read endpoint rows from a webgraph run's ``normalized/endpoints.jsonl``,
+    inferring ``object_scoped`` via :func:`_looks_object_scoped` when the mapping
+    source left it unset. Returns ``[]`` when the file is absent."""
+    ep_file = Path(normalized_dir) / "endpoints.jsonl"
+    out: List[Dict[str, Any]] = []
+    if not ep_file.exists():
+        return out
+    for line in ep_file.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        path = row.get("path", "")
+        out.append({
+            "method": row.get("method", "GET"), "path": path,
+            "object_scoped": bool(row.get("object_scoped")) or _looks_object_scoped(path),
+            "privileged": bool(row.get("privileged")), "url": row.get("url", ""),
+        })
+    return out
+
+
+def tests_from_graph(
+    endpoints: List[Mapping[str, Any]], identities: List[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Derive BOLA/BFLA authz tests from mapped endpoints using the operator's
+    *actual* identities (unlike :func:`template_from_inventory`, which stamps the
+    fixed ``_DEFAULT_IDENTITIES``). Owner is a non-admin identity for BOLA and an
+    admin-role identity for BFLA; ``others`` is every other identity + anonymous.
+
+    NB: a confirmed break needs concrete, per-identity-distinct object ids —
+    without them ``authz_diff`` may only reach ``suspected``. Concrete-id
+    enumeration is the deeper follow-up (roadmap S1)."""
+    names = [i.get("name") for i in identities if i.get("name")]
+    if not names:
+        return []
+    admin = next((i["name"] for i in identities
+                  if (i.get("role") or "").lower() in ("admin", "administrator")), None)
+    non_admin = [n for n in names if n != admin]
+    owner = non_admin[0] if non_admin else names[0]
+    priv_owner = admin or names[0]
+    tests: List[Dict[str, Any]] = []
+    idx = 1
+    for ep in endpoints:
+        method, path = ep.get("method", "GET"), ep.get("path", "")
+        if not path:
+            continue
+        if ep.get("object_scoped"):
+            tests.append({
+                "id": f"AZ-{idx:04d}", "method": method, "path": path,
+                "owner": owner, "class": "bola", "owasp": "API1",
+                "others": [n for n in names if n != owner] + ["anonymous"],
+                "control_path": path,
+            })
+            idx += 1
+        elif ep.get("privileged"):
+            tests.append({
+                "id": f"AZ-{idx:04d}", "method": method, "path": path,
+                "owner": priv_owner, "class": "bfla", "owasp": "API5",
+                "privileged": True,
+                "others": [n for n in names if n != priv_owner] + ["anonymous"],
+            })
+            idx += 1
+    return tests
+
+
+__all__ = [
+    "template_from_inventory", "endpoints_from_graph", "tests_from_graph",
+    "_looks_object_scoped",
+]

@@ -154,9 +154,18 @@ def check_llm() -> tuple[list, list]:
             if notice:
                 warnings.append(notice)
             try:
-                data = json.loads(config_path.read_text(encoding="utf-8"))
-                models = data.get("models", []) if isinstance(data, dict) else data
-            except (json.JSONDecodeError, OSError):
+                # Use the comment-aware loader (same as the runtime path in
+                # core.llm.detection) so `//`-commented JSONC configs are
+                # honored. Strict json.loads() choked on the leading comment
+                # and silently fell back to "no external LLM configured" even
+                # when models.json was valid and working at runtime.
+                from core.json import load_json_with_comments
+                data = load_json_with_comments(config_path)  # None on missing/parse error
+                if isinstance(data, dict):
+                    models = data.get("models", []) or []
+                elif isinstance(data, list):
+                    models = data
+            except (json.JSONDecodeError, OSError, ImportError):
                 pass
 
         # Also check env vars for providers not in models.json

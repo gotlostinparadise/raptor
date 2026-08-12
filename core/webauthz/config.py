@@ -33,16 +33,18 @@ except Exception:  # pragma: no cover
 class LoginConfig:
     """How to authenticate one identity. Credentials are env-var *names*."""
 
-    type: str = "none"          # none | bearer | api_key | basic | form
+    type: str = "none"          # none | bearer | api_key | basic | form | form_csrf
     token_env: str = ""         # bearer
     header: str = ""            # api_key header name
     value_env: str = ""         # api_key value env
     username_env: str = ""      # basic
     password_env: str = ""      # basic
-    login_url: str = ""         # form / json
+    login_url: str = ""         # form / json / form_csrf (POST target)
     fields: Dict[str, str] = field(default_factory=dict)   # form/json body (values may be "env:VAR")
     as_json: bool = False       # form encodes JSON
     token_path: str = "authentication.token"   # json: dot-path to the token in the response
+    token_field: str = "user_token"  # form_csrf: hidden-input name to scrape from the GET page
+    get_url: str = ""           # form_csrf: page to GET for the token (defaults to login_url)
 
     def credential_env_vars(self) -> List[str]:
         out = [self.token_env, self.value_env, self.username_env, self.password_env]

@@ -29,6 +29,7 @@ import abc
 import base64
 import json
 import os
+import re
 from typing import Any, Dict, Mapping, Optional
 
 from core.http import Response
@@ -193,7 +194,107 @@ class JsonLogin(LoginStrategy):
         return resp
 
 
+_INPUT_TAG_RE = re.compile(r"<input\b[^>]*>", re.IGNORECASE)
+_ATTR_RE = re.compile(
+    r"""([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""")
+
+
+def _tag_attrs(tag: str) -> Dict[str, str]:
+    attrs: Dict[str, str] = {}
+    for m in _ATTR_RE.finditer(tag):
+        val = m.group(2)
+        if val is None:
+            val = m.group(3)
+        if val is None:
+            val = m.group(4) or ""
+        attrs[m.group(1).lower()] = val
+    return attrs
+
+
+def extract_input_value(html: str, name: str) -> Optional[str]:
+    """Value of the first ``<input>`` whose ``name`` matches ``name``.
+
+    Used to scrape a per-session hidden anti-CSRF token (e.g. DVWA's
+    ``user_token``) out of a server-rendered login page so it can be echoed on
+    submit. Attribute order/quoting-agnostic. Returns ``None`` when absent.
+    """
+    for tag in _INPUT_TAG_RE.findall(html or ""):
+        a = _tag_attrs(tag)
+        if a.get("name") == name and "value" in a:
+            return a["value"]
+    return None
+
+
+def _resp_text(resp) -> str:
+    body = getattr(resp, "body", b"") or b""
+    if isinstance(body, (bytes, bytearray)):
+        return body.decode("utf-8", errors="replace")
+    return str(body)
+
+
+class FormLoginWithToken(LoginStrategy):
+    """GET a login page, scrape a hidden anti-CSRF token, then POST credentials.
+
+    Covers the classic server-rendered login where the form embeds a per-session
+    hidden field that must be echoed on submit (DVWA's ``user_token``, Django's
+    ``csrfmiddlewaretoken``, Rails' ``authenticity_token``, …). ``FormLogin``
+    can't do this because the token is a *hidden input value*, not a cookie.
+
+    Flow: GET ``get_url`` (login page; cookies fold into the identity jar) →
+    read the ``token_field`` value → merge it into ``fields`` → POST to
+    ``login_url``. Cookie continuity across the two requests is automatic (same
+    identity jar). ``success`` decides whether login worked; because many apps
+    return the same 3xx/2xx on success and failure, pass a body/redirect-aware
+    predicate (see the orchestrator's ``success_absent``/``success_present``).
+    """
+
+    def __init__(
+        self,
+        login_url: str,
+        fields: Dict[str, str],
+        *,
+        token_field: str = "user_token",
+        get_url: Optional[str] = None,
+        method: str = "POST",
+        as_json: bool = False,
+        follow_redirects: bool = True,
+        success=None,
+    ) -> None:
+        self.login_url = login_url
+        self.fields = dict(fields)
+        self.token_field = token_field
+        self.get_url = get_url or login_url
+        self.method = method.upper()
+        self.as_json = as_json
+        self.follow_redirects = follow_redirects
+        self.success = success or (lambda r: r.status < 400)
+
+    def _encode(self, fields: Dict[str, str]) -> tuple:
+        if self.as_json:
+            return json.dumps(fields).encode("utf-8"), "application/json"
+        from urllib.parse import urlencode
+        return urlencode(fields).encode("utf-8"), "application/x-www-form-urlencoded"
+
+    def apply(self, engine: Any, identity: Identity) -> Optional[Response]:
+        page = engine.request(
+            identity.name, "GET", self.get_url, follow_redirects=True)
+        fields = dict(self.fields)
+        if self.token_field:
+            tok = extract_input_value(_resp_text(page), self.token_field)
+            if tok is not None:
+                fields[self.token_field] = tok
+        body, content_type = self._encode(fields)
+        resp = engine.request(
+            identity.name, self.method, self.login_url,
+            body=body, headers={"Content-Type": content_type},
+            follow_redirects=self.follow_redirects,
+        )
+        identity.authenticated = bool(self.success(resp))
+        return resp
+
+
 __all__ = [
     "resolve_credential", "LoginStrategy", "BearerAuth", "ApiKeyAuth",
-    "BasicAuth", "FormLogin", "JsonLogin",
+    "BasicAuth", "FormLogin", "JsonLogin", "FormLoginWithToken",
+    "extract_input_value",
 ]

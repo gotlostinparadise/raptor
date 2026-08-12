@@ -162,3 +162,38 @@ def test_blind_ssrf_via_oast(tmp_path):
                         client_factory=lambda hosts: FakeClient(h), oast=oast)
     assert any(f.get("proof") == "oast_callback" and f["class"] == "ssrf"
                for f in run.findings)
+
+
+def _cookie_echo_app(seen):
+    """Records the Cookie header on every request; never confirms a finding."""
+    def h(method, url, headers, body):
+        seen.append(headers.get("Cookie"))
+        return resp(200, body=b"static page")
+    return lambda hosts: FakeClient(h)
+
+
+def test_config_cookies_reach_injection_requests(tmp_path):
+    # R2: a cookie set on InjectionConfig authenticates a standalone /inject run.
+    seen = []
+    cfg = _cfg(["sqli"])
+    cfg.cookies = {"PHPSESSID": "abc123"}
+    run_injection(cfg, out_dir=tmp_path, active=True, client_factory=_cookie_echo_app(seen))
+    assert seen and all(c and "PHPSESSID=abc123" in c for c in seen)
+
+
+def test_live_session_reused_and_injects_as_its_identity(tmp_path):
+    # R2: a live SessionEngine (cookie jar + bearer) threaded via config.session
+    # is reused; injection sends as its authenticated identity.
+    from core.session.engine import SessionEngine
+    from core.session.identity import Identity
+
+    seen = []
+    engine = SessionEngine(FakeClient(lambda m, u, h, b: (seen.append(h.get("Cookie")) or resp(200, body=b"ok"))))
+    ident = Identity(name="session", authenticated=True)
+    ident.jar.set("SESSION", "live-cookie", "app.test")
+    engine.add_identity(ident)
+
+    cfg = _cfg(["sqli"])
+    cfg.session = engine
+    run_injection(cfg, out_dir=tmp_path, active=True)
+    assert seen and all(c and "SESSION=live-cookie" in c for c in seen)
