@@ -165,3 +165,12 @@ def test_crawler_never_follows_logout():
     HttpCrawlSource().run(ctx)
     assert "/logout.php" not in seen      # the session-destroying link is never fetched
     assert "/page1" in seen               # ordinary links still crawled
+
+
+def test_not_auto_registered():
+    # An active source that fetches the live target must be an explicit opt-in,
+    # never in the default set a bare run_webgraph(sources=None) pulls in — else
+    # the recon→app bridge (and any sources=None caller) would silently crawl the
+    # real host as a side effect. Mirrors UrlHistorySource's contract.
+    from core.webgraph.source import all_sources
+    assert "http_crawl" not in all_sources()

@@ -28,7 +28,7 @@ from core.session.login import (
     resolve_credential,
 )
 from core.session.replay import RequestTemplate, authorization_diff, replay
-from core.webauthz.config import AuthzConfig, IdentityConfig, LoginConfig
+from core.webauthz.config import AuthzConfig, LoginConfig
 from core.webgraph import model as M
 from core.webgraph.orchestrator import persist_records, serialize_graph
 from core.webgraph.builder import build_graph

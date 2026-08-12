@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 # The vuln classes the runner knows how to test.

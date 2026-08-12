@@ -17,7 +17,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlsplit
 
 from core.http import HttpError, Response
 from core.racecond import oracle

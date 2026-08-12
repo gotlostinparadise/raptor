@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import re
 from collections import deque
-from typing import Any, List, Optional, Sequence, Set, Tuple
+from typing import Any, List, Optional, Sequence, Set
 from urllib.parse import parse_qsl, urlsplit
 
 from core.http_crawl.parse import ParsedForm, parse_page
@@ -33,7 +33,7 @@ from core.webgraph import model as M
 from core.webgraph.scope import (
     canonical_origin, canonical_url, endpoint_id, in_scope, split_url, strip_query,
 )
-from core.webgraph.source import RunContext, Source, SourceResult, register
+from core.webgraph.source import RunContext, Source, SourceResult
 
 # Content types we attempt to parse as HTML.
 _HTML_HINTS = ("text/html", "application/xhtml")
@@ -88,9 +88,17 @@ def _is_session_destroying(url: str) -> bool:
     return bool(_SESSION_DESTROYING_RE.search(urlsplit(url).path or ""))
 
 
-@register
 class HttpCrawlSource(Source):
-    """Fetch + crawl same-origin server-rendered pages over plain HTTP."""
+    """Fetch + crawl same-origin server-rendered pages over plain HTTP.
+
+    **Not auto-registered on purpose.** It is an *active* source that fetches the
+    live target, so — like :class:`core.webgraph.url_history.UrlHistorySource` —
+    it must never sneak into the default source set via ``run_webgraph(sources=
+    None)`` and silently crawl a host as a side effect (e.g. the recon→app bridge
+    building a graph from already-collected records). Callers that want it —
+    ``/webpentest``'s map phase and ``/webgraph <url>`` when no spec/browser is
+    forced — instantiate it explicitly. It is never in ``all_sources()``.
+    """
 
     name = "http_crawl"
     consumes = ("origins", "urls")

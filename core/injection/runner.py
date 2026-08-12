@@ -22,7 +22,7 @@ from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
 
 from core.injection import oracles, payloads
 from core.payloads.feedback import record_confirmed as _fb_record
-from core.injection.config import BLIND_CLASSES, InjectionConfig, InjectionPoint
+from core.injection.config import InjectionConfig, InjectionPoint
 from core.injection.markers import MarkerFactory
 from core.oast.outcome import vuln_record as _oast_vuln
 from core.session.attach import engine_for
