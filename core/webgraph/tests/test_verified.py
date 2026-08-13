@@ -89,3 +89,53 @@ def test_record_confirmed_skips_unconfirmed(tmp_path):
     row = _authz_vuln()
     row["status"] = M.STATUS_SUSPECTED
     assert record_confirmed([row], project_dir=tmp_path) == []
+
+
+# ── exploit-case auto-accrual (experience layer) ──────────────────────────────
+
+def test_record_confirmed_accrues_proto_case(tmp_path, monkeypatch):
+    """Every confirmed+proven row mints one proto exploit-case at this seam."""
+    calls = []
+    monkeypatch.setattr("core.sage.hooks.store_exploit_case",
+                        lambda **kw: (calls.append(kw), True)[1])
+    paths = record_confirmed([_authz_vuln()], project_dir=tmp_path,
+                             target_urls={"GET /api/orders/{id}": "https://x.com/api/orders/2"})
+    assert len(paths) == 1          # verified outcome still written
+    assert len(calls) == 1          # and a case accrued
+    kw = calls[0]
+    assert kw["proof_kind"] == M.PROOF_AUTHZ_DIFF
+    assert kw["vuln_class"] == "bola"
+    assert kw["cwe"] == "CWE-639"
+    assert kw["technique_id"] == "idor-bola-replay"   # methodology cross-ref
+    assert kw["distilled"] is False                   # proto, needs enrichment
+    assert len(kw["signature"]) >= 20
+    assert "authz_diff" in kw["case_body"]
+    assert "https://x.com/api/orders/2" in kw["signature"]
+
+
+def test_accrual_disabled_by_env(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr("core.sage.hooks.store_exploit_case",
+                        lambda **kw: calls.append(kw))
+    monkeypatch.setenv("RAPTOR_EXPLOIT_CASE_ACCRUAL", "0")
+    record_confirmed([_authz_vuln()], project_dir=tmp_path)
+    assert calls == []
+
+
+def test_accrual_failure_never_breaks_record_confirmed(tmp_path, monkeypatch):
+    """A SAGE/accrual error must not lose the verified outcome."""
+    def boom(**kw):
+        raise RuntimeError("sage down")
+    monkeypatch.setattr("core.sage.hooks.store_exploit_case", boom)
+    paths = record_confirmed([_authz_vuln()], project_dir=tmp_path)
+    assert len(paths) == 1
+
+
+def test_unconfirmed_not_accrued(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr("core.sage.hooks.store_exploit_case",
+                        lambda **kw: calls.append(kw))
+    row = _authz_vuln()
+    row["status"] = M.STATUS_SUSPECTED
+    record_confirmed([row], project_dir=tmp_path)
+    assert calls == []

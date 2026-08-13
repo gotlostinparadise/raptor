@@ -1567,8 +1567,25 @@ class TestExploitCase(unittest.TestCase):
         self.assertIn("||proof=reflected_marker||", content)
         self.assertIn("||cwe=CWE-89||", content)
         self.assertIn("||cost_steps=7||", content)
+        self.assertIn("||distilled=1||", content)   # default: a full case
         self.assertIn("exploit-case", kw["tags"])
         self.assertIn("error-based-union", kw["tags"])
+
+    @patch("core.sage.hooks._propose_redacted", return_value=True)
+    @patch("core.sage.hooks._get_client")
+    def test_store_proto_case_marks_undistilled(self, mock_gc, mock_pr):
+        """distilled=False (auto-minted proto-case) tags ||distilled=0||."""
+        mock_gc.return_value = MagicMock()
+        from core.sage.hooks import store_exploit_case, parse_exploit_case_tags
+        ok = store_exploit_case(
+            signature=self._SIG, vuln_class="bola",
+            proof_kind="authz_diff", case_body=self._BODY,
+            distilled=False,
+        )
+        self.assertTrue(ok)
+        content = mock_pr.call_args[1]["content"]
+        self.assertIn("||distilled=0||", content)
+        self.assertEqual(parse_exploit_case_tags(content)["distilled"], "0")
 
     @patch("core.sage.hooks._get_client", return_value=None)
     def test_recall_returns_empty_when_unavailable(self, _):

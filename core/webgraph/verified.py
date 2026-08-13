@@ -19,6 +19,8 @@ core graph never imports the outcomes stack.
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
@@ -73,8 +75,88 @@ _EVIDENCE_TYPE: Dict[str, str] = {
 }
 
 
+# vuln_class → techniques.jsonl id (methodology cross-reference). Only classes
+# with a verified KB id are mapped; the rest get "" — a wrong cross-ref is worse
+# than none.
+_TECHNIQUE_BY_CLASS: Dict[str, str] = {
+    "idor": "idor-bola-replay", "bola": "idor-bola-replay",
+    "bfla": "bfla-method-tampering",
+}
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _accrual_enabled() -> bool:
+    """Exploit-case auto-accrual is on by default; ``RAPTOR_EXPLOIT_CASE_ACCRUAL=0`` disables."""
+    return os.getenv("RAPTOR_EXPLOIT_CASE_ACCRUAL", "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
+
+
+def _accrue_exploit_case(row: Mapping[str, Any], target_url: str = "") -> bool:
+    """Best-effort: mint a *proto* exploit-case from a confirmed+proven finding.
+
+    Fires once per confirmed row inside :func:`record_confirmed`, so every web
+    engine (/webauthz, /inject, /graphql, /clientside, /race …) auto-accrues an
+    experience case at ONE seam — no per-engine wiring. The proto-case carries
+    only the *spine*: the problem-side surface signature, the oracle proof, and
+    the confirmed request. It is tagged ``||distilled=0||``; the transferable
+    reasoning (negative-knowledge, decision-signals, generalization-boundary) is
+    deferred to LLM enrichment via the ``exploit-cases`` skill.
+
+    NEVER raises and never blocks the pipeline: SAGE is purely additive, and the
+    underlying ``store_exploit_case`` hook already no-ops when SAGE is
+    unavailable / on CPU and is gated on ``proof_kind`` (defence in depth — the
+    caller only reaches here for confirmed+proven rows).
+    """
+    if not _accrual_enabled():
+        return False
+    try:
+        from core.sage.hooks import store_exploit_case
+    except Exception:
+        return False
+    try:
+        proof = row.get("proof_kind") or ""
+        vc = row.get("vuln_class") or "web"
+        eid = row.get("endpoint_id") or ""
+        param = row.get("param") or ""
+        identity = row.get("identity") or ""
+        etype = _EVIDENCE_TYPE.get(proof, proof)
+        ref = target_url or eid or "unknown-endpoint"
+        try:
+            ev_str = json.dumps(
+                dict(row.get("evidence") or {}), default=str, sort_keys=True,
+            )[:300]
+        except Exception:
+            ev_str = str(row.get("evidence") or "")[:300]
+        signature = (
+            f"Web/API {vc} on endpoint '{eid or ref}'"
+            + (f", parameter '{param}'" if param else "")
+            + f". A request carrying attacker-controlled input is accepted and "
+            f"the {etype} oracle fired. Surface: {ref}."
+        )
+        who = f", identity '{identity}'" if identity else ""
+        par = f" (param '{param}'{who})" if param else (
+            f" (identity '{identity}')" if identity else ""
+        )
+        case_body = (
+            f"WINNING PATH: {vc} confirmed on {eid or ref}{par} -> {etype} proof.\n"
+            f"ORACLE PROOF: proof_kind={proof}  evidence={ev_str}\n"
+            f"NEGATIVE KNOWLEDGE: (auto-stub - enrich from the solve: "
+            f"dead ends, red herrings).\n"
+            f"DECISION SIGNALS: (auto-stub - enrich: the observation that confirmed it).\n"
+            f"GENERALIZATION BOUNDARY: (auto-stub - enrich: transfers vs instance-only)."
+        )
+        return store_exploit_case(
+            signature=signature, vuln_class=vc, proof_kind=proof,
+            case_body=case_body, cwe=_CWE_BY_CLASS.get(vc, _DEFAULT_CWE),
+            technique_id=_TECHNIQUE_BY_CLASS.get(vc, ""),
+            target_ref=ref, distilled=False,
+        )
+    except Exception:
+        return False
 
 
 def _signature(vuln_class: str, endpoint_id: str, param: str) -> str:
@@ -139,12 +221,15 @@ def record_confirmed(
     for row in vuln_rows:
         if row.get("status") != M.STATUS_CONFIRMED:
             continue
+        turl = target_urls.get(row.get("endpoint_id") or "", "")
         la = labeled_attempt_from_vuln(
-            row, target_url=target_urls.get(row.get("endpoint_id") or "", ""),
-            producing_model=producing_model,
+            row, target_url=turl, producing_model=producing_model,
         )
         paths += _store_write(la, project_dir=Path(project_dir),
                               also_global=also_global)
+        # Auto-accrue an experience case from this oracle-proven finding.
+        # Best-effort and additive — never affects the paths returned.
+        _accrue_exploit_case(row, target_url=turl)
     return paths
 
 

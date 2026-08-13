@@ -1004,9 +1004,16 @@ def store_exploit_case(
     technique_id: str = "",
     target_ref: str = "",
     cost_steps: Optional[int] = None,
+    distilled: bool = True,
     confidence: float = 0.85,
 ) -> bool:
     """Retain one solved vuln-instance as a reusable experience case.
+
+    ``distilled=False`` marks a **proto-case**: a mechanical stub carrying only
+    the surface signature + oracle proof (e.g. auto-minted at an engine
+    confirmation), with the transferable reasoning — negative-knowledge,
+    decision-signals, generalization-boundary — deferred to LLM enrichment. It
+    is tagged ``||distilled=0||`` so the exploit-cases skill knows to upgrade it.
 
     Gated on the oracle: a case is stored ONLY when ``proof_kind`` is a
     real mechanical proof (see ``_ORACLE_PROOF_KINDS``). ``proof_kind='none'``
@@ -1037,7 +1044,7 @@ def store_exploit_case(
         tags_line = (
             f"||class={_s(vuln_class)}|| ||cwe={_s(cwe)}|| "
             f"||proof={_s(pk)}|| ||technique={_s(technique_id)}|| "
-            f"||target={_s(target_ref)}||"
+            f"||target={_s(target_ref)}|| ||distilled={1 if distilled else 0}||"
         )
         if cost_steps is not None:
             tags_line += f" ||cost_steps={int(cost_steps)}||"
