@@ -108,10 +108,20 @@ def build_engine(
     engine = SessionEngine(client, csrf_cookie=config.csrf_cookie,
                            csrf_header=config.csrf_header)
     warnings: List[str] = []
+    from urllib.parse import urlsplit as _urlsplit
+    _host = _urlsplit(config.base_url).hostname or ""
     for ic in config.identities:
         ident = Identity(name=ic.name, role=ic.role,
                          credential_env_vars=tuple(ic.login.credential_env_vars()))
         engine.add_identity(ident)
+        # Browser-supplied cookie/header auth (in lieu of a scriptable login).
+        for _k, _v in (getattr(ic, "headers", None) or {}).items():
+            ident.auth_headers[_k] = _v
+        for _cn, _cv in (getattr(ic, "cookies", None) or {}).items():
+            if _cn and _host:
+                ident.jar.set(_cn, _cv, _host)
+        if getattr(ic, "headers", None) or getattr(ic, "cookies", None):
+            ident.authenticated = True
         strat, warn = _strategy_for(ic.login, env)
         if warn:
             warnings.append(f"identity {ic.name}: {warn}")

@@ -59,6 +59,11 @@ class IdentityConfig:
     name: str
     role: str = ""
     login: LoginConfig = field(default_factory=LoginConfig)
+    # Cookie/header auth for a browser-supplied session (CAPTCHA-gated targets):
+    # seeds this identity's jar / auth headers directly, in lieu of a scriptable
+    # login — so multi-identity BOLA/BFLA works against cookie-auth APIs.
+    cookies: Dict[str, str] = field(default_factory=dict)
+    headers: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -124,7 +129,9 @@ def from_dict(data: Mapping[str, Any]) -> AuthzConfig:
     """Build an :class:`AuthzConfig` from a parsed dict, with validation."""
     idents = [
         IdentityConfig(name=i["name"], role=i.get("role", ""),
-                       login=_login_from(i.get("login") or {}))
+                       login=_login_from(i.get("login") or {}),
+                       cookies=dict(i.get("cookies") or {}),
+                       headers=dict(i.get("headers") or {}))
         for i in (data.get("identities") or [])
     ]
     tests = []
