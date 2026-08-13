@@ -18,6 +18,7 @@ If this file is loaded, SAGE is available — use it.
 - `raptor-methodology` — Analysis methodology and expert reasoning
 - `raptor-fp-{repo_key}` — Finding verdicts for cross-run FP suppression (repo-scoped)
 - `raptor-rule-library` — Proven checker rules (engine + CWE keyed, cross-target, shared by `/agentic` and `/audit`)
+- `raptor-exploit-cases` — **Experience layer:** oracle-proven solved vuln-instances distilled for cross-target reuse (global, not repo-scoped — the value is transfer to *similar* instances). Written only on a real `proof_kind`; recalled by problem-side signature. See `.claude/skills/exploit-cases/SKILL.md`.
 - `raptor-concepts-{repo_key}` — Study/teach concept recall (repo-scoped)
 - `raptor-audit-{repo_key}` — Audit hypothesis verdicts (repo-scoped)
 

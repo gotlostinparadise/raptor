@@ -970,6 +970,151 @@ def recall_audit_observations(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Exploit cases — a-posteriori solved-instance experience for cross-target reuse
+#
+# The "experience layer": after a vuln instance is solved AND an oracle
+# mechanically proves it, distill the solve into one reusable case so a
+# near-zero-context successor can re-derive a *similar* instance faster.
+# Distinct from `raptor-methodology` (a-priori technique lore) and from the
+# repo-scoped `raptor-findings-*` (this-target results): this domain is global
+# by design because the whole value is transfer across targets.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_EXPLOIT_CASE_DOMAIN = "raptor-exploit-cases"
+_EXPLOIT_CASE_HEADER = "EXPLOIT-CASE v1"
+
+# proof_kind values that count as an oracle-verified solve. Anything else
+# (``none`` / empty / unknown) means the solve was never mechanically proven,
+# so there is no trustworthy path to retain — the Retain step is a no-op.
+# Mirrors the platform rule: a finding is ``confirmed`` only when a tool
+# oracle fires (see .claude/skills/webpentest-methodology/SKILL.md proof table).
+_ORACLE_PROOF_KINDS = frozenset({
+    "authz_diff", "oast_callback", "reflected_marker",
+    "state_oracle", "token_forged", "token_analysis", "flag",
+})
+
+
+def store_exploit_case(
+    *,
+    signature: str,
+    vuln_class: str,
+    proof_kind: str,
+    case_body: str,
+    cwe: str = "",
+    technique_id: str = "",
+    target_ref: str = "",
+    cost_steps: Optional[int] = None,
+    confidence: float = 0.85,
+) -> bool:
+    """Retain one solved vuln-instance as a reusable experience case.
+
+    Gated on the oracle: a case is stored ONLY when ``proof_kind`` is a
+    real mechanical proof (see ``_ORACLE_PROOF_KINDS``). ``proof_kind='none'``
+    / empty / unknown → no store. A path that was never mechanically proven
+    is a hypothesis, not experience — retaining it would let a hallucinated
+    solve poison future recall. This is the anti-hallucination anchor.
+
+    The stored ``content`` leads with the problem-side *signature* (so a
+    future first-contact recall query embeds close to it), followed by the
+    solution-side *case_body*, then ``||key=val||`` machine-tags for
+    mechanical parse-back. Stored as ``observation`` @ 0.85 mirroring
+    ``store_audit_observation`` — the existing cross-target-transfer analog;
+    successful reuse is expected to ``corroborate`` the case upward, disused
+    cases decay (the emergent fitness function).
+    """
+    pk = (proof_kind or "").strip().lower()
+    if pk not in _ORACLE_PROOF_KINDS:
+        return False
+    if not signature or len(signature) < 20:
+        return False
+    if not case_body or len(case_body) < 40:
+        return False
+    client = _get_client()
+    if client is None:
+        return False
+    try:
+        _s = _sanitise_delim
+        tags_line = (
+            f"||class={_s(vuln_class)}|| ||cwe={_s(cwe)}|| "
+            f"||proof={_s(pk)}|| ||technique={_s(technique_id)}|| "
+            f"||target={_s(target_ref)}||"
+        )
+        if cost_steps is not None:
+            tags_line += f" ||cost_steps={int(cost_steps)}||"
+        content = (
+            f"{_EXPLOIT_CASE_HEADER} [{_s(vuln_class)}]\n"
+            f"SIGNATURE: {signature}\n"
+            f"{case_body}\n"
+            f"{tags_line}"
+        )
+        tag_list = ["exploit-case", vuln_class]
+        if cwe:
+            tag_list.append(cwe)
+        if technique_id:
+            tag_list.append(technique_id)
+        return _propose_redacted(
+            client=client,
+            content=content,
+            memory_type="observation",
+            domain_tag=_EXPLOIT_CASE_DOMAIN,
+            confidence=confidence,
+            tags=tag_list,
+        )
+    except Exception as e:
+        logger.debug("SAGE exploit-case store failed: %s", e)
+        return False
+
+
+def recall_exploit_cases(
+    signature_query: str,
+    top_k: int = 5,
+    min_confidence: float = 0.6,
+) -> List[Dict[str, Any]]:
+    """Retrieve solved cases whose problem-signature is similar to the target.
+
+    ``signature_query`` must be *problem-side* language — what a fresh agent
+    sees on first contact (stack, symptom, entry-point shape), NEVER the
+    solution: recall runs before the answer is known, so a query written in
+    solution vocabulary can never match. Returns EXPLOIT-CASE rows only
+    (drops foreign memories that merely embedded nearby), SAGE-ranked.
+    """
+    if not signature_query:
+        return []
+    client = _get_client()
+    if client is None:
+        return []
+    try:
+        _metric_inc("recall_attempted")
+        results = client.query(
+            text=signature_query,
+            domain_tag=_EXPLOIT_CASE_DOMAIN,
+            top_k=top_k,
+            min_confidence=min_confidence,
+        )
+        out = [
+            r for r in results
+            if _EXPLOIT_CASE_HEADER in str(r.get("content") or "")
+        ]
+        _metric_inc("recall_hits", len(out))
+        return out
+    except Exception as e:
+        logger.debug("SAGE exploit-case recall failed: %s", e)
+        return []
+
+
+def parse_exploit_case_tags(content: str) -> Dict[str, str]:
+    """Parse ``||key=val||`` machine-tags out of an exploit-case content blob.
+
+    Lets a mechanical consumer read ``proof``, ``class``, ``technique``,
+    ``cost_steps`` etc. back out without re-embedding or LLM parsing.
+    """
+    out: Dict[str, str] = {}
+    for m in re.finditer(r"\|\|([a-z_]+)=([^|]*)\|\|", content or ""):
+        out[m.group(1)] = m.group(2).strip()
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SCA (Software Composition Analysis) — mechanical short-circuit
 # ─────────────────────────────────────────────────────────────────────────────
 

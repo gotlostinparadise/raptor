@@ -1508,5 +1508,128 @@ class TestAuditSageIntegration(unittest.TestCase):
         self.assertEqual(domains_seen[1], "raptor-methodology")
 
 
+class TestExploitCase(unittest.TestCase):
+    """Tests for the exploit-case experience layer (store/recall/parse)."""
+
+    _SIG = "PHP/MySQL app, GET id param reflects a SQL error on a single quote"
+    _BODY = (
+        "WINNING PATH: error-based UNION on id. NEGATIVE: login form is "
+        "parameterized, 25min sink. PROOF: reflected_marker returned."
+    )
+
+    @patch("core.sage.hooks._get_client", return_value=None)
+    def test_store_returns_false_when_unavailable(self, _):
+        from core.sage.hooks import store_exploit_case
+        self.assertFalse(store_exploit_case(
+            signature=self._SIG, vuln_class="sqli",
+            proof_kind="reflected_marker", case_body=self._BODY,
+        ))
+
+    def test_store_rejects_unproven_solve(self):
+        """proof_kind none/empty/unknown -> no case retained (anti-hallucination)."""
+        from core.sage.hooks import store_exploit_case
+        for pk in ("none", "", "probably", "suspected"):
+            self.assertFalse(store_exploit_case(
+                signature=self._SIG, vuln_class="sqli",
+                proof_kind=pk, case_body=self._BODY,
+            ), f"proof_kind={pk!r} should not store")
+
+    def test_store_rejects_thin_signature_or_body(self):
+        from core.sage.hooks import store_exploit_case
+        self.assertFalse(store_exploit_case(
+            signature="too short", vuln_class="sqli",
+            proof_kind="reflected_marker", case_body=self._BODY,
+        ))
+        self.assertFalse(store_exploit_case(
+            signature=self._SIG, vuln_class="sqli",
+            proof_kind="reflected_marker", case_body="thin",
+        ))
+
+    @patch("core.sage.hooks._propose_redacted", return_value=True)
+    @patch("core.sage.hooks._get_client")
+    def test_store_confirmed_case(self, mock_gc, mock_pr):
+        mock_gc.return_value = MagicMock()
+        from core.sage.hooks import store_exploit_case
+        ok = store_exploit_case(
+            signature=self._SIG, vuln_class="sqli", cwe="CWE-89",
+            proof_kind="reflected_marker", case_body=self._BODY,
+            technique_id="error-based-union", target_ref="dvwa:8080",
+            cost_steps=7,
+        )
+        self.assertTrue(ok)
+        kw = mock_pr.call_args[1]
+        self.assertEqual(kw["domain_tag"], "raptor-exploit-cases")
+        self.assertEqual(kw["confidence"], 0.85)
+        self.assertEqual(kw["memory_type"], "observation")
+        content = kw["content"]
+        self.assertIn("EXPLOIT-CASE v1", content)
+        self.assertIn("SIGNATURE:", content)
+        self.assertIn("||proof=reflected_marker||", content)
+        self.assertIn("||cwe=CWE-89||", content)
+        self.assertIn("||cost_steps=7||", content)
+        self.assertIn("exploit-case", kw["tags"])
+        self.assertIn("error-based-union", kw["tags"])
+
+    @patch("core.sage.hooks._get_client", return_value=None)
+    def test_recall_returns_empty_when_unavailable(self, _):
+        from core.sage.hooks import recall_exploit_cases
+        self.assertEqual(recall_exploit_cases("php mysql id param"), [])
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_filters_to_exploit_cases(self, mock_gc):
+        mock_client = MagicMock()
+        mock_client.query.return_value = [
+            {"content": "EXPLOIT-CASE v1 [sqli]\nSIGNATURE: ...\n||proof=reflected_marker||",
+             "confidence": 0.85},
+            {"content": "Unrelated home-domain memory that embedded nearby",
+             "confidence": 0.82},
+        ]
+        mock_gc.return_value = mock_client
+        from core.sage.hooks import recall_exploit_cases
+        results = recall_exploit_cases("php mysql app id param sql error")
+        self.assertEqual(len(results), 1)
+        self.assertIn("EXPLOIT-CASE v1", results[0]["content"])
+        # domain filter is passed through to the query
+        self.assertEqual(
+            mock_client.query.call_args[1]["domain_tag"], "raptor-exploit-cases"
+        )
+
+    def test_parse_exploit_case_tags(self):
+        from core.sage.hooks import parse_exploit_case_tags
+        content = (
+            "EXPLOIT-CASE v1 [sqli]\nSIGNATURE: x\nbody\n"
+            "||class=sqli|| ||cwe=CWE-89|| ||proof=reflected_marker|| "
+            "||technique=error-based-union|| ||target=dvwa:8080|| ||cost_steps=7||"
+        )
+        tags = parse_exploit_case_tags(content)
+        self.assertEqual(tags["proof"], "reflected_marker")
+        self.assertEqual(tags["class"], "sqli")
+        self.assertEqual(tags["cwe"], "CWE-89")
+        self.assertEqual(tags["technique"], "error-based-union")
+        self.assertEqual(tags["cost_steps"], "7")
+
+    @patch("core.sage.hooks._get_client")
+    def test_store_then_parse_roundtrip(self, mock_gc):
+        """Content written by store_exploit_case parses back cleanly."""
+        from core.sage.hooks import store_exploit_case, parse_exploit_case_tags
+        captured = {}
+
+        def fake_propose(**kwargs):
+            captured["content"] = kwargs["content"]
+            return True
+
+        mock_gc.return_value = MagicMock()
+        with patch("core.sage.hooks._propose_redacted", side_effect=fake_propose):
+            store_exploit_case(
+                signature=self._SIG, vuln_class="idor", cwe="CWE-639",
+                proof_kind="authz_diff", case_body=self._BODY,
+                technique_id="idor-bola-replay", cost_steps=4,
+            )
+        tags = parse_exploit_case_tags(captured["content"])
+        self.assertEqual(tags["proof"], "authz_diff")
+        self.assertEqual(tags["class"], "idor")
+        self.assertEqual(tags["technique"], "idor-bola-replay")
+
+
 if __name__ == "__main__":
     unittest.main()
