@@ -102,22 +102,28 @@ def mechanical_score(point: InjectionPoint, vuln_class: str) -> Tuple[float, str
         return bool(_KW[name].search(param))
 
     if vuln_class in ("sqli", "sqli_oob"):
-        if kw("id"):
-            score += 0.45; why.append("id-like param")
+        # A search/query/filter param flows into a WHERE clause — the prime SQLi
+        # surface — so it ranks at/above an id param (id is more a BOLA signal
+        # than an injection one, and REST /resource?id= is often non-injectable).
         if kw("search"):
-            score += 0.35; why.append("search/filter param")
-        if _has(plc, "/search", "/api", "/rest", "/query", "/login", "/user",
-                "/product", "/item"):
-            score += 0.15; why.append("data-access path")
-    elif vuln_class == "nosqli":
+            score += 0.45; why.append("search/filter param (prime SQLi surface)")
         if kw("id"):
             score += 0.35; why.append("id-like param")
+        if _has(plc, "/search", "/query"):
+            score += 0.15; why.append("search endpoint")
+        elif _has(plc, "/api", "/rest", "/login", "/user", "/product", "/item"):
+            score += 0.10; why.append("data-access path")
+    elif vuln_class == "nosqli":
         if kw("search"):
-            score += 0.30; why.append("search/filter param")
+            score += 0.40; why.append("search/filter param")
+        if kw("id"):
+            score += 0.30; why.append("id-like param")
         if point.content_type == "json":
             score += 0.25; why.append("json body (operator injection)")
-        if _has(plc, "/api", "/rest", "/graphql", "/login"):
-            score += 0.15; why.append("api path")
+        if _has(plc, "/search", "/query"):
+            score += 0.15; why.append("search endpoint")
+        elif _has(plc, "/api", "/rest", "/graphql", "/login"):
+            score += 0.10; why.append("api path")
     elif vuln_class == "xss":
         if kw("text"):
             score += 0.40; why.append("free-text param")
@@ -321,7 +327,12 @@ def triage_points(
             s, reason = mechanical_score(p, cls)
             prior = priors.get(cls, 0)
             if s > 0 and prior:
-                s = min(1.0, s + 0.10 * prior)
+                # The flywheel is a per-CLASS prior — it nudges a class up, but
+                # must NOT flatten the per-endpoint mechanical score to 1.0 (which
+                # would hand ordering to the alphabetical tie-break and bury the
+                # real target). Cap its contribution so mechanical discrimination
+                # between endpoints of the same class survives.
+                s = min(1.0, s + min(0.15, 0.05 * prior))
                 reason = f"{reason}; flywheel+{prior}"
             scored.append((s, p.label, cls, reason))
 

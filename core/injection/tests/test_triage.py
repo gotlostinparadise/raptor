@@ -28,6 +28,18 @@ def test_static_asset_scores_zero_for_every_class():
         assert "asset" in reason
 
 
+def test_search_param_outranks_id_param_for_sqli():
+    # N8 (found in the N4 authenticated Juice Shop run): a search/query param is
+    # prime SQLi surface and must rank at/above an id param, else a budget is
+    # spent on non-injectable /resource?id= endpoints before reaching the real one.
+    search = mechanical_score(_pt("/rest/products/search", "q"), "sqli")[0]
+    idp = mechanical_score(_pt("/api/Addresss", "id"), "sqli")[0]
+    assert search > idp
+    # same for nosqli
+    assert (mechanical_score(_pt("/rest/products/search", "q"), "nosqli")[0]
+            >= mechanical_score(_pt("/api/Addresss", "id"), "nosqli")[0])
+
+
 def test_mechanical_score_rewards_plausible_signals():
     # file/path param on a download path is a strong path-traversal candidate.
     strong = mechanical_score(_pt("/download", "file"), "path_traversal")[0]
