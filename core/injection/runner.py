@@ -125,6 +125,7 @@ class InjectionRunner:
         self.adapt = adapt           # read responses → evasion + response-guided order
         self.adapt_steps = adapt_steps   # per-hypothesis step cap (0 = no cap)
         self.union = False           # N1: escalate confirmed SQLi to UNION extraction
+        self.union_extract: List[str] = []   # operator-declared dump SELECT fragments
         self._markers = MarkerFactory()
         self._n = 0
 
@@ -330,7 +331,8 @@ class InjectionRunner:
         """
         from core.injection.union import extract_via_union
         try:
-            result = extract_via_union(point, send, self._markers.next())
+            result = extract_via_union(point, send, self._markers.next(),
+                                       extract_sql=self.union_extract or None)
         except InjectionHalt:
             raise
         except Exception as exc:
@@ -471,6 +473,7 @@ def run_injection(
                              adapt=bool(getattr(config, "adapt", False)),
                              adapt_steps=int(getattr(config, "adapt_steps", 0) or 0))
     runner.union = bool(getattr(config, "union", False))
+    runner.union_extract = list(getattr(config, "union_extract", []) or [])
     vulns: List[Dict[str, Any]] = []
     planted: Dict[str, Dict[str, str]] = {}
     # Walk points in triage-priority order (best pairs first) so a request budget
@@ -556,11 +559,13 @@ def run_injection(
     # request budget (via _dispatch) and a chain-round cap.
     if getattr(config, "chain", False) and runner.halted is None:
         from core.injection.chain import (
-            derive_identities, derive_points, extract_artifacts)
+            derive_identities, derive_points, extract_artifacts,
+            persist_chained_surface)
         chain_rounds = int(getattr(config, "chain_rounds", 2) or 2)
         tested = {p.label for p in config.points}
         default_ident = runner.identity_name
         registered: List[str] = []          # N2: escalated identities from leaked tokens
+        chained_points: List[InjectionPoint] = []   # N6: surface to persist
         chain_log: List[Dict[str, Any]] = []
         for cround in range(1, chain_rounds + 1):
             arts = extract_artifacts(run.findings, base_url=config.base_url)
@@ -591,6 +596,7 @@ def run_injection(
             # Test each derived point as the tester AND as any escalated identity
             # (a leaked token may unlock surface the anonymous tester can't reach).
             who_list = [default_ident] + list(registered)
+            chained_points.extend(new_points)   # N6: remember for persistence
             for p in new_points:
                 tested.add(p.label)   # mark all derived points so none re-derive
             # N5: triage the chained points too, so a budget is spent on the
@@ -628,6 +634,18 @@ def run_injection(
                 break
         if chain_log:
             run.chain = {"rounds": chain_log}
+        # N6: persist the chained surface into normalized/ so the orchestrator's
+        # fixpoint loop re-tests it across the OTHER phases too (authz/graphql/
+        # clientside), not only inject. Merge-safe; grows _surface_size.
+        if chained_points:
+            try:
+                added = persist_chained_surface(
+                    out / "normalized", chained_points, config.base_url)
+                if added and run.chain is not None:
+                    run.chain["persisted_endpoints"] = added
+            except Exception as exc:
+                run.warnings.append(
+                    f"chain surface persist failed: {type(exc).__name__}: {exc}")
 
     # poll OAST for blind confirmations
     if oast and planted:

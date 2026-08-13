@@ -136,3 +136,22 @@ def test_union_off_by_default(tmp_path):
 
 def test_config_union_round_trips():
     assert from_dict({"base_url": "https://x", "union": True}).union is True
+
+
+def test_union_extract_runs_operator_declared_expression():
+    eng = _engine(_union_app(columns=3))
+    from core.injection.runner import _send
+
+    def send(pl):
+        return _send(eng, "anonymous", "http://t", _point(), pl)
+
+    res = extract_via_union(_point(), send, MarkerFactory().next(),
+                            extract_sql=["SELECT group_concat(email) FROM Users"])
+    assert res is not None and "custom_0" in res.extracted
+
+
+def test_union_extract_implies_union_and_round_trips():
+    cfg = from_dict({"base_url": "https://x",
+                     "union_extract": ["SELECT group_concat(email) FROM Users"]})
+    assert cfg.union is True                       # union_extract implies union
+    assert cfg.union_extract == ["SELECT group_concat(email) FROM Users"]

@@ -206,4 +206,59 @@ def derive_identities(artifacts: ChainArtifacts) -> List[tuple]:
     return out
 
 
-__all__ = ["ChainArtifacts", "extract_artifacts", "derive_points", "derive_identities"]
+def persist_chained_surface(normalized_dir, points, base_url: str = "") -> int:
+    """Persist chained injection points as endpoint/parameter records (N6).
+
+    Merges (never clobbers) the chained ``(method, path, param)`` into
+    ``normalized/{endpoints,parameters}.jsonl`` so the orchestrator's fixpoint
+    loop re-tests the grown surface across the OTHER phases too (authz / graphql
+    / clientside), not just inject. De-duplicated against what is already mapped;
+    returns the number of new endpoints added. Safe no-op when there is nothing
+    new. (``_finalize`` only writes the ``vulns`` kind, so this is never
+    clobbered by the run's own graph persistence.)
+    """
+    from pathlib import Path
+
+    from core.webgraph.model import EndpointRecord, ParamRecord
+    from core.webgraph.orchestrator import load_records, persist_records
+    from core.webgraph.scope import endpoint_id
+
+    normalized_dir = Path(normalized_dir)
+    origin = ""
+    if base_url:
+        u = urlsplit(base_url)
+        origin = f"{u.scheme}://{u.netloc}" if u.scheme and u.netloc else ""
+
+    existing = load_records(normalized_dir)
+    eps = list(existing.get("endpoints", []))
+    params = list(existing.get("parameters", []))
+    ep_keys = {endpoint_id(r.get("method", "GET"), r.get("path", "")) for r in eps}
+    param_keys = {(r.get("endpoint_id"), r.get("name"), r.get("location"))
+                  for r in params}
+
+    added = 0
+    for p in points:
+        if p.location == "fragment":
+            continue
+        eid = endpoint_id(p.method, p.path)
+        if eid not in ep_keys:
+            ep_keys.add(eid)
+            eps.append(EndpointRecord(method=p.method, path=p.path, origin=origin,
+                                      source="chain").to_row())
+            added += 1
+        pkey = (eid, p.param, p.location)
+        if pkey not in param_keys:
+            param_keys.add(pkey)
+            params.append(ParamRecord(endpoint_id=eid, name=p.param,
+                                      location=p.location, source="chain").to_row())
+
+    if added:
+        merged = dict(existing)
+        merged["endpoints"] = eps
+        merged["parameters"] = params
+        persist_records(normalized_dir, merged)
+    return added
+
+
+__all__ = ["ChainArtifacts", "extract_artifacts", "derive_points",
+           "derive_identities", "persist_chained_surface"]
