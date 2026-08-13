@@ -79,6 +79,10 @@ class InjectionConfig:
     # SQLi (e.g. "SELECT group_concat(email) FROM Users"). Opt-in, authorized
     # data extraction — empty by default. Implies union.
     union_extract: List[str] = field(default_factory=list)
+    # N7 — multi-model verification. Each listed model independently re-judges the
+    # oracle-confirmed findings as an advisory confidence signal (never overrides
+    # the mechanical verdict). Empty = no verification.
+    verify_models: List[str] = field(default_factory=list)
 
     def enabled_classes(self, *, have_oast: bool) -> List[str]:
         out = [c for c in self.classes if c in ALL_CLASSES]
@@ -115,6 +119,7 @@ def from_dict(data: Mapping[str, Any]) -> InjectionConfig:
         chain_rounds=int(data.get("chain_rounds", 2) or 2),
         union=bool(data.get("union", False)) or bool(data.get("union_extract")),
         union_extract=list(data.get("union_extract") or []),
+        verify_models=list(data.get("verify_models") or []),
     )
 
 
