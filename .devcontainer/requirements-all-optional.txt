@@ -16,3 +16,7 @@ google-genai==2.4.0
 # Web scanning package
 beautifulsoup4==4.15.0
 playwright==1.60.0
+
+# Binary exploit analysis (ELF parsing, protections detection, gadget
+# search) for packages/exploit_feasibility and /exploit
+pwntools==4.15.0

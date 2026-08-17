@@ -81,6 +81,14 @@ packaging==25.0
 # Optional: For SMT-based constraint analysis (one-gadget feasibility, etc.)
 # z3-solver==4.15.4.0  # see requirements-dev.txt for bookworm/aarch64 cap
 
+# Optional: Binary exploit analysis (ELF parsing, checksec-equivalent
+# protections detection, gadget search) for packages/exploit_feasibility
+# and /exploit. Code already has an ImportError fallback to readelf/
+# objdump when this is absent (see packages/exploit_feasibility/analyzer.py),
+# but without it protection detection is slower and less reliable, and
+# PoC generation loses pwntools' process/ELF/context helpers.
+# pwntools==4.15.0
+
 # Optional: For web scanning package (uncomment to install)
 # beautifulsoup4==4.15.0
 # playwright==1.60.0
